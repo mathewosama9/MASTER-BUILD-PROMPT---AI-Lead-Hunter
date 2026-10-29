@@ -1,0 +1,276 @@
+export type Role = "owner" | "admin" | "analyst" | "viewer";
+
+export interface Me {
+  user: { id: string; email: string; full_name: string; is_active: boolean; locale: string };
+  workspace_id: string;
+  workspace_name: string;
+  role: Role;
+  csrf_token: string | null;
+  demo_mode: boolean;
+}
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export type CampaignStatus =
+  | "draft"
+  | "queued"
+  | "discovering"
+  | "enriching"
+  | "analyzing"
+  | "completed"
+  | "partially_completed"
+  | "failed"
+  | "paused"
+  | "cancelled";
+
+export interface CampaignStats {
+  target?: number;
+  discovered?: number;
+  duplicates_removed?: number;
+  unique_leads?: number;
+  enriched?: number;
+  analyzed?: number;
+  scored?: number;
+  qualified?: number;
+  high_priority?: number;
+  lead_errors?: number;
+  contacts_found?: number;
+  businesses_with_contacts?: number;
+  emails_found?: number;
+  verified_emails?: number;
+  rate_limit_warnings?: number;
+  provider_failures?: number;
+  ai_provider?: string | null;
+  progress?: { percent: number | null; completed_units: number; total_units: number | null };
+}
+
+export interface CampaignSource {
+  provider_key: string;
+  status: string;
+  results_count: number;
+  last_error: string | null;
+  manual_urls: string[];
+}
+
+export interface Campaign {
+  id: string;
+  name: string;
+  status: CampaignStatus;
+  stage: string;
+  origin: string;
+  is_demo: boolean;
+  country: string;
+  city: string | null;
+  region: string | null;
+  language: string;
+  industry: string;
+  keywords: string[];
+  excluded_keywords: string[];
+  company_size: string | null;
+  characteristics: string[];
+  services: string[];
+  nl_query: string | null;
+  settings: Record<string, number | boolean>;
+  stats: CampaignStats;
+  cost_discovery: number;
+  cost_ai: number;
+  last_error: string | null;
+  sources: CampaignSource[];
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface JobEvent {
+  id: string;
+  stage: string;
+  level: "info" | "warning" | "error";
+  event_type: string;
+  message: string;
+  provider_key: string | null;
+  data: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface LeadRow {
+  id: string;
+  name: string;
+  website_url: string | null;
+  normalized_domain: string | null;
+  country: string | null;
+  city: string | null;
+  industry: string | null;
+  latest_score: number | null;
+  latest_priority: string | null;
+  recommended_service: string | null;
+  crm_status: string;
+  contact_count: number;
+  has_verified_contact: boolean;
+  is_demo: boolean;
+  sources: string[];
+  campaigns: { id: string; name: string; score: number | null }[];
+  tags: string[];
+  outreach_eligible: boolean;
+  updated_at: string;
+}
+
+export interface Contact {
+  id: string;
+  type: string;
+  subtype: string | null;
+  value: string;
+  person_name: string | null;
+  person_role: string | null;
+  source_url: string | null;
+  source_provider: string;
+  retrieved_at: string;
+  verification_status: string;
+  verified_at: string | null;
+  confidence: number;
+  usage_restrictions: string | null;
+  is_suppressed: boolean;
+}
+
+export interface Assessment {
+  id: string;
+  campaign_id: string | null;
+  provider: string;
+  model: string | null;
+  summary: string;
+  observed_signals: { signal: string; evidence_ids: string[] }[];
+  hypotheses: { statement: string; basis_evidence_ids: string[]; confidence: string }[];
+  potential_problems: string[];
+  evidence_links: { id: string; url: string | null; title: string | null }[];
+  recommended_services: { service: string; rationale: string; evidence_ids: string[] }[];
+  opportunity: string;
+  suggested_pitch: string;
+  unknowns: string[];
+  confidence: number;
+  industry_fit: number;
+  characteristics_fit: number;
+  cost_usd: number;
+  created_at: string;
+}
+
+export interface Score {
+  id: string;
+  total: number;
+  priority: string;
+  factors: Record<string, number>;
+  weights: Record<string, number>;
+  explanation: string[];
+  scoring_version: string;
+  created_at: string;
+}
+
+export interface Draft {
+  id: string;
+  language: string;
+  tone: string;
+  length: string;
+  service: string | null;
+  short_intro: string;
+  email_subject: string;
+  email_body: string;
+  whatsapp_message: string;
+  follow_up: string;
+  proposal_summary: string;
+  provider: string;
+  created_at: string;
+}
+
+export interface LeadDetail {
+  business: Record<string, unknown> & {
+    id: string;
+    name: string;
+    website_url: string | null;
+    crm_status: string;
+    is_demo: boolean;
+    country: string | null;
+    city: string | null;
+    industry: string | null;
+    description: string | null;
+    latest_score: number | null;
+    latest_priority: string | null;
+    address: string | null;
+  };
+  contacts: Contact[];
+  sources: { id: string; provider_key: string; source_url: string; title: string | null; snippet: string | null; discovered_at: string; campaign_id: string | null }[];
+  evidence: { id: string; kind: string; signal_key: string | null; url: string | null; title: string | null; excerpt: string | null; observed: boolean; captured_at: string }[];
+  assessment: Assessment | null;
+  assessments: Assessment[];
+  score: Score | null;
+  campaigns: { id: string; name: string; status: string; score: number | null; priority: string | null; qualified: boolean; added_at: string; discovered_via: string }[];
+  notes: { id: string; body: string; author_id: string | null; created_at: string }[];
+  tags: string[];
+  activities: { id: string; type: string; payload: Record<string, unknown>; user_id: string | null; created_at: string }[];
+  drafts: Draft[];
+  outreach_eligible: boolean;
+  suppressed: boolean;
+}
+
+export interface Provider {
+  key: string;
+  name: string;
+  kind: string;
+  description: string;
+  requires: string[];
+  docs_url: string | null;
+  status: "connected" | "requires_api_key" | "requires_permission" | "unsupported" | "disabled" | "rate_limited" | "error";
+  status_detail: string | null;
+  enabled: boolean;
+  credential_source: "env" | "workspace" | null;
+  credentials_masked: Record<string, string | null>;
+  settings: Record<string, unknown>;
+  last_tested_at: string | null;
+  last_error: string | null;
+  usage_month: { requests: number; cost_usd: number };
+}
+
+export interface Meta {
+  demo_mode: boolean;
+  countries: { code: string; name_en: string; name_ar: string; cities: { en: string; ar: string }[] }[];
+  industries: { key: string; en: string; ar: string }[];
+  services: { key: string; en: string; ar: string }[];
+  scoring: { weights: Record<string, number>; thresholds: Record<string, number>; version: string };
+}
+
+export interface DashboardStats {
+  totals: {
+    businesses: number;
+    qualified_leads: number;
+    with_contact: number;
+    with_verified_contact: number;
+    average_score: number | null;
+    active_campaigns: number;
+    completed_campaigns: number;
+    failed_campaigns: number;
+    ai_cost_usd: number;
+    discovery_cost_usd: number;
+    today: number;
+    week: number;
+    month: number;
+    conversion_rate: number | null;
+  };
+  trend: { date: string; count: number }[];
+  by_country: { key: string; count: number }[];
+  by_industry: { key: string; count: number }[];
+  by_source: { key: string; count: number }[];
+  score_distribution: { bucket: string; count: number }[];
+  recent_leads: { id: string; name: string; city: string | null; country: string | null; score: number | null; priority: string | null; is_demo: boolean; created_at: string }[];
+  active_campaigns: { id: string; name: string; status: CampaignStatus; stage: string; stats: CampaignStats; is_demo: boolean }[];
+  recent_activity: {
+    id: string;
+    campaign_id: string;
+    campaign: string;
+    message: string;
+    data?: Record<string, unknown>;
+    level: string;
+    created_at: string;
+  }[];
+}

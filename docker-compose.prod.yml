@@ -1,0 +1,21 @@
+# Production overlay:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Adds nginx as the single public entry point; internal services are no longer published on host ports.
+services:
+  api:
+    ports: !reset []
+    environment:
+      ENVIRONMENT: production
+      COOKIE_SECURE: "true"
+  frontend:
+    ports: !reset []
+  telegram:
+    environment:
+      # Set TELEGRAM_WEBHOOK_URL=https://your-domain and TELEGRAM_WEBHOOK_SECRET in .env for webhook mode.
+      WEBHOOK_PORT: "8081"
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports: ["${PUBLIC_PORT:-80}:80"]
+    depends_on: [api, frontend, telegram]
+    restart: unless-stopped

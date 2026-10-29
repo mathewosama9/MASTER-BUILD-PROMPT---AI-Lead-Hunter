@@ -1,0 +1,10 @@
+**/.venv
+**/node_modules
+**/.next
+**/__pycache__
+**/*.pyc
+**/test-results
+**/playwright-report
+**/.env
+**/test.db
+shot-*.png

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" width="640" height="640">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#1B1E5C"/>
+      <stop offset="60%" stop-color="#11133D"/>
+      <stop offset="100%" stop-color="#0E0F31"/>
+    </radialGradient>
+    <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1D79FF" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#1D79FF" stop-opacity="0.55"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFC100" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#FFC100" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="disc"><circle cx="320" cy="320" r="236"/></clipPath>
+  </defs>
+
+  <rect width="640" height="640" fill="url(#bg)"/>
+
+  <!-- radar disc -->
+  <circle cx="320" cy="320" r="236" fill="#0E0F31" stroke="#4E94FF" stroke-opacity="0.9" stroke-width="6"/>
+  <g fill="none" stroke="#4E94FF" stroke-opacity="0.35" stroke-width="3">
+    <circle cx="320" cy="320" r="177"/>
+    <circle cx="320" cy="320" r="118"/>
+    <circle cx="320" cy="320" r="59"/>
+    <line x1="84" y1="320" x2="556" y2="320"/>
+    <line x1="320" y1="84" x2="320" y2="556"/>
+  </g>
+
+  <!-- sweep wedge -->
+  <g clip-path="url(#disc)">
+    <path d="M320 320 L556 320 A236 236 0 0 0 487 153 Z" fill="url(#sweep)"/>
+  </g>
+  <line x1="320" y1="320" x2="487" y2="153" stroke="#99C2FF" stroke-width="7" stroke-linecap="round"/>
+
+  <!-- faint other blips -->
+  <circle cx="226" cy="236" r="9" fill="#99C2FF" fill-opacity="0.55"/>
+  <circle cx="250" cy="420" r="7" fill="#99C2FF" fill-opacity="0.4"/>
+  <circle cx="430" cy="404" r="8" fill="#99C2FF" fill-opacity="0.45"/>
+
+  <!-- the lead: yellow target -->
+  <circle cx="412" cy="232" r="70" fill="url(#glow)"/>
+  <circle cx="412" cy="232" r="34" fill="none" stroke="#FFC100" stroke-width="7"/>
+  <circle cx="412" cy="232" r="16" fill="#FFC100"/>
+
+  <!-- center hub -->
+  <circle cx="320" cy="320" r="14" fill="#1D79FF"/>
+</svg>

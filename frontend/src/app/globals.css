@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (next-themes toggles .dark on <html>). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * codex brand identity (from the brand guideline):
+ *   Navy #0E0F31 · Indigo #4B4D83 · Lavender #C5C6E3 · Ghost #F2F3FF
+ *   Blue 700 #0049B2 · Blue 500 #1D79FF · Blue 400 #4E94FF · Blue 200 #99C2FF · Blue 100 #CCE0FF
+ *   Yellow 500 #FFC100 · Yellow 400 #FFCF48 · Yellow 200 #FFE197 · Yellow 100 #FFF1D2
+ * Fonts: Neue Montreal (EN), Rubik + Noto Sans Arabic (AR).
+ */
+/* Neue Montreal is a licensed font: drop the .woff2 files in public/fonts and uncomment
+   the @font-face block in public/fonts/README.md instructions. Until then Inter is used. */
+
+@theme {
+  --color-navy-950: #08091f;
+  --color-navy-900: #0e0f31;
+  --color-navy-800: #17184a;
+  --color-navy-700: #25275f;
+  --color-indigo-500: #4b4d83;
+  --color-lavender-300: #c5c6e3;
+  --color-ghost-50: #f2f3ff;
+  --color-brand-700: #0049b2;
+  --color-brand-500: #1d79ff;
+  --color-brand-400: #4e94ff;
+  --color-brand-200: #99c2ff;
+  --color-brand-100: #cce0ff;
+  --color-sun-500: #ffc100;
+  --color-sun-400: #ffcf48;
+  --color-sun-200: #ffe197;
+  --color-sun-100: #fff1d2;
+
+  --font-display: "Neue Montreal", var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-arabic: var(--font-rubik), var(--font-noto-arabic), ui-sans-serif, sans-serif;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --font-sans: var(--app-font);
+  --radius-lg: 0.875rem;
+  --radius-md: 0.625rem;
+  --radius-sm: 0.375rem;
+}
+
+:root {
+  --background: #f2f3ff; /* Ghost */
+  --foreground: #0e0f31; /* Navy */
+  --card: #ffffff;
+  --card-foreground: #0e0f31;
+  --muted: #e8e9f7;
+  --muted-foreground: #4b4d83; /* Indigo */
+  --border: #d9dbef;
+  --input: #c5c6e3; /* Lavender */
+  --ring: #1d79ff;
+  --primary: #0049b2; /* Blue 700 for AA contrast on light */
+  --primary-foreground: #ffffff;
+  --secondary: #cce0ff;
+  --secondary-foreground: #0049b2;
+  --accent: #ffc100; /* Yellow */
+  --accent-foreground: #0e0f31;
+  --destructive: #d92d4a;
+  --success: #12996b;
+  --warning: #b37a00;
+  --sidebar: #0e0f31;
+  --sidebar-foreground: #f2f3ff;
+  --sidebar-muted: #c5c6e3;
+  --app-font: var(--font-display);
+}
+
+.dark {
+  --background: #08091f;
+  --foreground: #f2f3ff;
+  --card: #0e0f31;
+  --card-foreground: #f2f3ff;
+  --muted: #17184a;
+  --muted-foreground: #c5c6e3;
+  --border: #25275f;
+  --input: #2e3070;
+  --ring: #4e94ff;
+  --primary: #4e94ff; /* Blue 400 on navy */
+  --primary-foreground: #08091f;
+  --secondary: #17184a;
+  --secondary-foreground: #99c2ff;
+  --accent: #ffc100;
+  --accent-foreground: #0e0f31;
+  --destructive: #ff5c77;
+  --success: #3ddc97;
+  --warning: #ffcf48;
+  --sidebar: #08091f;
+  --sidebar-foreground: #f2f3ff;
+  --sidebar-muted: #9a9cc9;
+}
+
+html[dir="rtl"] {
+  --app-font: var(--font-arabic);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--app-font);
+}
+
+* {
+  border-color: var(--border);
+}
+
+::selection {
+  background: #ffc100;
+  color: #0e0f31;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+.animate-indeterminate {
+  animation: indeterminate 1.4s ease-in-out infinite;
+}

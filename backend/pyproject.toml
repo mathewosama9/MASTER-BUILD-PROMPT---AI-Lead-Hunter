@@ -1,0 +1,68 @@
+[project]
+name = "ai-lead-hunter-backend"
+version = "0.1.0"
+description = "AI Lead Hunter — B2B lead discovery backend (FastAPI + Celery)"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "email-validator>=2.2",
+  "sqlalchemy[asyncio]>=2.0.32",
+  "asyncpg>=0.29",
+  "psycopg[binary]>=3.2",
+  "alembic>=1.13",
+  "redis>=5.0",
+  "celery>=5.4",
+  "httpx>=0.27",
+  "selectolax>=0.3.21",
+  "argon2-cffi>=23.1",
+  "pyjwt>=2.9",
+  "cryptography>=43",
+  "python-json-logger>=2.0.7",
+  "openpyxl>=3.1",
+  "slowapi>=0.1.9",
+  "tldextract>=5.1",
+  "phonenumbers>=8.13",
+  "sse-starlette>=2.1",
+  "anthropic>=0.40",
+  "typer>=0.12",
+  "dnspython>=2.6",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.40"]
+# Direct browser scraping (Google Maps, public social profiles). Installed in the worker image.
+scraping = ["playwright>=1.48"]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "respx>=0.21",
+  "aiosqlite>=0.20",
+  "ruff>=0.6",
+]
+
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101", "B008", "S311", "UP046"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106", "E402"]

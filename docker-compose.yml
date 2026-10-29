@@ -1,0 +1,119 @@
+# AI Lead Hunter — local/full stack.  Usage:  cp .env.example .env && docker compose up --build
+name: ai-lead-hunter
+
+x-backend-env: &backend-env
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-leadhunter}:${POSTGRES_PASSWORD:-leadhunter}@postgres:5432/${POSTGRES_DB:-leadhunter}
+    REDIS_URL: redis://redis:6379/0
+    FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+    CORS_ORIGINS: ${FRONTEND_URL:-http://localhost:3000}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-leadhunter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leadhunter}
+      POSTGRES_DB: ${POSTGRES_DB:-leadhunter}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build: { context: ., dockerfile: infrastructure/docker/backend.Dockerfile, target: base }
+    image: ai-lead-hunter-backend
+    <<: *backend-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    image: ai-lead-hunter-backend
+    <<: *backend-env
+    ports: ["${API_PORT:-8000}:8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    build: { context: ., dockerfile: infrastructure/docker/backend.Dockerfile, target: worker }
+    image: ai-lead-hunter-worker
+    <<: *backend-env
+    shm_size: "1gb"  # Chromium needs more than Docker's 64 MB default /dev/shm
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "research,default", "--concurrency", "${WORKER_CONCURRENCY:-4}", "-l", "info"]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  login-browser:
+    build: { context: ., dockerfile: infrastructure/docker/backend.Dockerfile, target: login-browser }
+    image: ai-lead-hunter-login-browser
+    env_file: .env
+    # noVNC is bound to localhost only: the screen is reachable from this machine's browser, not the network.
+    ports: ["127.0.0.1:${LOGIN_BROWSER_PORT:-6080}:6080"]
+    shm_size: "1gb"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7900/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  beat:
+    image: ai-lead-hunter-backend
+    <<: *backend-env
+    command: ["celery", "-A", "app.workers.celery_app", "beat", "-l", "info", "-s", "/tmp/celerybeat-schedule"]
+    healthcheck: { disable: true }
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/frontend.Dockerfile
+      args: { API_INTERNAL_URL: http://api:8000 }
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    ports: ["${WEB_PORT:-3000}:3000"]
+    depends_on: [api]
+    restart: unless-stopped
+
+  telegram:
+    build: { context: ., dockerfile: infrastructure/docker/telegram.Dockerfile }
+    env_file: .env
+    environment:
+      API_BASE_URL: http://api:8000/api/v1
+      REDIS_URL: redis://redis:6379/2
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+    depends_on: [api]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
