@@ -234,3 +234,31 @@ async def test_password_reset_revokes_telegram_links(anon, db, outbox):
     account = await db.scalar(select(TelegramAccount).where(TelegramAccount.telegram_user_id == 777001))
     await db.refresh(account)
     assert account.status == TelegramLinkStatus.REVOKED
+
+
+async def test_password_reset_burns_unused_telegram_link_codes(anon, db, outbox):
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.security import hash_code
+    from app.models import TelegramLinkCode
+
+    body = await signup(anon)
+    user = await db.scalar(select(User).where(User.email == body["email"]))
+    db.add(
+        TelegramLinkCode(
+            user_id=user.id,
+            workspace_id=uuid.UUID(body["workspace_id"]),
+            code_hash=hash_code("OLDCODE1"),
+            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        )
+    )
+    await db.commit()
+    outbox.clear()
+    await forgot(anon, body["email"])
+    r = await anon.post(
+        "/api/v1/auth/password/reset", json={"token": link_token(outbox[0]), "password": "a-brand-new-password"}
+    )
+    assert r.status_code == 200
+    code = await db.scalar(select(TelegramLinkCode).where(TelegramLinkCode.user_id == user.id))
+    await db.refresh(code)
+    assert code.used_at is not None  # /link OLDCODE1 now fails as "already used"

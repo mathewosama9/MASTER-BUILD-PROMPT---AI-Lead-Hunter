@@ -18,7 +18,7 @@ from app.core.security import (
     password_fingerprint,
     verify_password,
 )
-from app.models import AuditLog, TelegramAccount, User, Workspace, WorkspaceMember
+from app.models import AuditLog, TelegramAccount, TelegramLinkCode, User, Workspace, WorkspaceMember
 from app.models.enums import Role, TelegramLinkStatus
 from app.schemas.auth import (
     ForgotPasswordIn,
@@ -99,6 +99,21 @@ def _slug(company: str) -> str:
     return f"{base}-{secrets.token_hex(4)}"
 
 
+async def _revoke_telegram(db: DB, user_id: uuid.UUID) -> None:
+    """Telegram links authenticate without the session cookie, so a password change must cut them off too:
+    linked chats are revoked and unused link codes burnt (e.g. someone who signed up with this email first)."""
+    await db.execute(
+        update(TelegramAccount)
+        .where(TelegramAccount.user_id == user_id, TelegramAccount.status != TelegramLinkStatus.REVOKED)
+        .values(status=TelegramLinkStatus.REVOKED)
+    )
+    await db.execute(
+        update(TelegramLinkCode)
+        .where(TelegramLinkCode.user_id == user_id, TelegramLinkCode.used_at.is_(None))
+        .values(used_at=datetime.now(UTC))
+    )
+
+
 def _ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -169,13 +184,7 @@ async def reset_password(body: ResetPasswordIn, request: Request, db: DB) -> Mes
     ):
         raise AppError(_BAD_RESET, code="invalid_token")
     user.password_hash = hash_password(body.password)  # also signs out every existing session
-    # Telegram links authenticate without the session cookie, so they are revoked too: whoever linked a chat
-    # before the reset (e.g. someone who signed up with this email first) loses access with the old password.
-    await db.execute(
-        update(TelegramAccount)
-        .where(TelegramAccount.user_id == user.id, TelegramAccount.status != TelegramLinkStatus.REVOKED)
-        .values(status=TelegramLinkStatus.REVOKED)
-    )
+    await _revoke_telegram(db, user.id)
     await accounts.mark_verified(db, user)  # the reset link proves the user reads this inbox
     db.add(AuditLog(user_id=user.id, action="auth.password_reset", ip=_ip(request), via="web"))
     await db.commit()
@@ -232,6 +241,7 @@ async def change_password(
     if not verify_password(body.current_password, p.user.password_hash):
         raise Unauthorized("Current password is incorrect")
     p.user.password_hash = hash_password(body.new_password)  # signs out other sessions
+    await _revoke_telegram(db, p.user.id)
     await audit(db, p, "auth.password_changed", "user", p.user.id)
     await db.commit()
     if p.via == "web":  # keep this browser signed in

@@ -122,8 +122,21 @@ function supervise() {
   }
 }
 
+// The visitor's address is the last X-Forwarded-For entry: LiteSpeed appends it, while anything before it came
+// from the visitor and can be forged. The API trusts this header (uvicorn --forwarded-allow-ips on its socket,
+// which only this process can reach), so it is rebuilt here with that single trusted address.
+function clientIp(req) {
+  const chain = String(req.headers["x-forwarded-for"] || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return chain.length ? chain[chain.length - 1] : req.socket.remoteAddress || "";
+}
+
 function proxy(req, res, socketPath) {
-  const headers = { ...req.headers, "x-forwarded-proto": "https" };
+  const headers = { ...req.headers, "x-forwarded-proto": "https", "x-forwarded-for": clientIp(req) };
+  delete headers.forwarded;
+  delete headers["x-real-ip"];
   const upstream = http.request({ socketPath, path: req.url, method: req.method, headers }, (up) => {
     res.writeHead(up.statusCode || 502, up.headers);
     up.pipe(res);
