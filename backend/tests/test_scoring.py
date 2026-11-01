@@ -95,3 +95,12 @@ def test_a_verified_decision_maker_with_a_direct_channel_is_the_best_contact():
     assert plain.factors["contact_availability"] == 0.6
     assert known.factors["contact_availability"] == 0.7
     assert direct.factors["contact_availability"] == 1.0
+
+
+def test_exported_cells_never_run_as_formulas():
+    from app.services.exports import _safe_cell
+
+    for bad in ("=HYPERLINK(\"http://x\")", "-2+3+cmd|' /C calc'!A0", "+1+1", "@SUM(A1)", "\t=1", "=1+2"):
+        assert _safe_cell(bad) == "'" + bad, bad
+    assert _safe_cell("+966501234567") == "+966501234567"  # an exported phone stays readable
+    assert _safe_cell("Sara Al Harbi") == "Sara Al Harbi" and _safe_cell(42) == 42

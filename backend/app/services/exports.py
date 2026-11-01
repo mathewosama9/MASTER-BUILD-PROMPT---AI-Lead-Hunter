@@ -3,6 +3,7 @@ never a placeholder that could look like real contact data."""
 
 import csv
 import io
+import re
 import uuid
 
 from openpyxl import Workbook
@@ -169,9 +170,14 @@ def to_csv(rows: list[list]) -> bytes:
     return ("﻿" + buf.getvalue()).encode("utf-8")
 
 
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+_PHONE_CELL = re.compile(r"\+\d{6,15}")  # E.164, as exported: kept readable
+
+
 def _safe_cell(v: object) -> object:
-    """Neutralise spreadsheet formula injection from scraped text."""
-    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@") and not v[1:2].isdigit():
+    """Neutralise spreadsheet formula injection from scraped text: any text starting with a formula character
+    is prefixed with a quote, whatever follows ("-2+3+cmd|..." included). Only a bare phone number is exempt."""
+    if isinstance(v, str) and v.startswith(_FORMULA_START) and not _PHONE_CELL.fullmatch(v):
         return "'" + v
     return v
 
