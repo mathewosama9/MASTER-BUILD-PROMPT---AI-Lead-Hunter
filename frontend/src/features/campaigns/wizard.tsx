@@ -13,7 +13,9 @@ import { PageHeader } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, Checkbox, Field, Input, Select, Switch, Textarea } from "@/components/ui/primitives";
 import { ErrorState, LoadingState, Spinner } from "@/components/ui/states";
-import { useMeta, useProviders } from "@/hooks/queries";
+import Link from "next/link";
+import { OutOfCredits } from "@/features/billing/out-of-credits";
+import { useBillingSummary, useMeta, usePlatformAdmin, useProfile, useProviders, useServiceName } from "@/hooks/queries";
 import { useI18n } from "@/i18n/provider";
 import { api, ApiError } from "@/lib/api";
 import { cn, humanize } from "@/lib/utils";
@@ -29,27 +31,34 @@ import {
   type CampaignFormValues,
 } from "./schema";
 
-const SOURCE_ORDER = ["google_maps", "osm", "import", "brave", "hunter", "x", "facebook", "manual", "demo"];
+const SOURCE_ORDER = ["google_maps", "osm", "directories", "social_discovery", "import", "brave", "hunter", "x", "facebook", "manual", "demo"];
 
 interface Estimate {
   providers: Record<string, { status: string; detail: string | null }>;
   estimated_requests: number;
   estimated_cost_usd: number | null;
   notes: string[];
+  credits_max: number;
+  credit_balance: number | null;
 }
 
 export function CampaignWizard() {
-  const { t, locale, label, vmsg } = useI18n();
+  const { t, locale, label, vmsg, source } = useI18n();
   const router = useRouter();
   const qc = useQueryClient();
   const meta = useMeta();
   const providers = useProviders();
+  const platformAdmin = usePlatformAdmin();
+  const { data: billing } = useBillingSummary();
+  const profile = useProfile();
+  const nameOf = useServiceName();
   const [step, setStep] = useState(0);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
 
   const form = useForm<CampaignFormInput, unknown, CampaignFormValues>({
     resolver: zodResolver(campaignSchema),
-    defaultValues: defaultCampaignValues,
+    // Searches default to the language the user works in.
+    defaultValues: { ...defaultCampaignValues, language: locale },
     mode: "onTouched",
   });
   const { register, control, formState, setValue, getValues, trigger, handleSubmit } = form;
@@ -77,7 +86,7 @@ export function CampaignWizard() {
     onSuccess: (c) => {
       qc.invalidateQueries({ queryKey: ["campaigns"] });
       toast.success(c.status === "draft" ? t.wizard.draftSaved : t.wizard.campaignStarted);
-      router.push(`/campaigns/${c.id}`);
+      router.push(`/app/campaigns/${c.id}`);
     },
     onError: (e: Error) => toast.error(e instanceof ApiError ? e.message : String(e)),
   });
@@ -88,15 +97,16 @@ export function CampaignWizard() {
   const providerList = (providers.data ?? []).filter((p) => p.kind === "discovery");
   const country = m.countries.find((c) => c.code === values.country);
   const isDemo = (values.sources ?? []).includes("demo");
+  // A real search can't start with no credits left or after the trial ended; demo searches are free.
+  const noCredits =
+    !!billing && !billing.billing_exempt && (billing.balance <= 0 || (billing.on_trial && billing.trial_expired));
   const sep = locale === "ar" ? "، " : ", ";
   const industryName = (k: string | undefined) => {
     const i = m.industries.find((x) => x.key === k);
     return i ? (locale === "ar" ? i.ar : i.en) : humanize(k);
   };
-  const serviceName = (k: string | undefined) => {
-    const sv = m.services.find((x) => x.key === k);
-    return sv ? (locale === "ar" ? sv.ar : sv.en) : humanize(k);
-  };
+  const offerings = profile.data?.offerings ?? [];
+  const serviceName = (k: string | undefined) => (k ? nameOf(k, locale) : humanize(k));
 
   async function next() {
     const ok = await trigger(STEP_FIELDS[step] as never);
@@ -149,7 +159,7 @@ export function CampaignWizard() {
               )}
               aria-current={i === step ? "step" : undefined}
             >
-              <span className={cn("h-1 rounded-full", i < step ? "bg-brand-500" : i === step ? "bg-sun-500" : "bg-muted")} />
+              <span className={cn("h-1 rounded-full", i < step ? "bg-rasd-500" : i === step ? "bg-sun-500" : "bg-muted")} />
               <span className="flex items-center gap-1 font-medium">
                 {i < step ? <Check className="size-3" /> : <span className="tabular-nums">{i + 1}.</span>}
                 <span className="hidden sm:inline">{label}</span>
@@ -197,7 +207,7 @@ export function CampaignWizard() {
 
             {step === 1 && (
               <div className="space-y-4">
-                <div className="rounded-lg border border-brand-500/30 bg-brand-500/5 p-4">
+                <div className="rounded-lg border border-rasd-500/30 bg-rasd-500/5 p-4">
                   <Field label={t.wizard.nlQuery} htmlFor="nl_query">
                     <Textarea id="nl_query" placeholder={t.wizard.nlPlaceholder} {...register("nl_query")} />
                   </Field>
@@ -249,22 +259,29 @@ export function CampaignWizard() {
                     name="services"
                     render={({ field }) => (
                       <div className="flex flex-wrap gap-2">
-                        {m.services.map((s) => {
-                          const on = field.value.includes(s.key);
+                        {!offerings.length ? (
+                          <p className="text-xs text-muted-foreground">
+                            {t.business.noOfferings}{" "}
+                            <Link href="/app/settings" className="text-primary underline">{t.business.tab}</Link>
+                          </p>
+                        ) : null}
+                        {offerings.map((s) => {
+                          const on = field.value.includes(s.id);
                           return (
                             <button
                               type="button"
-                              key={s.key}
+                              key={s.id}
                               aria-pressed={on}
+                              title={s.description || undefined}
                               onClick={() =>
-                                field.onChange(on ? field.value.filter((x) => x !== s.key) : [...field.value, s.key])
+                                field.onChange(on ? field.value.filter((x) => x !== s.id) : [...field.value, s.id])
                               }
                               className={cn(
                                 "rounded-full border px-3 py-1 text-xs transition-colors",
-                                on ? "border-brand-500 bg-brand-500/15 text-foreground" : "hover:bg-muted",
+                                on ? "border-rasd-500 bg-rasd-500/15 text-foreground" : "hover:bg-muted",
                               )}
                             >
-                              {locale === "ar" ? s.ar : s.en}
+                              {s.name}
                             </button>
                           );
                         })}
@@ -289,18 +306,24 @@ export function CampaignWizard() {
                           key={p.key}
                           className={cn(
                             "flex cursor-pointer gap-3 rounded-lg border p-4 transition-colors",
-                            on && "border-brand-500 bg-brand-500/10",
+                            on && "border-rasd-500 bg-rasd-500/10",
                             !can && "cursor-not-allowed opacity-60",
                           )}
                         >
                           <Checkbox checked={on} onCheckedChange={() => can && toggleSource(p)} aria-label={p.name} />
                           <div className="min-w-0 flex-1 space-y-1">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-medium">{t.labels[p.key] ?? p.name}</span>
+                              <span className="text-sm font-medium">
+                                {platformAdmin ? (t.labels[p.key] ?? p.name) : (t.customerSources[p.key]?.name ?? source(p.key))}
+                              </span>
                               <ProviderStatusBadge status={p.status} />
                             </div>
-                            <p className="text-xs text-muted-foreground">{(t.providerDesc as Record<string, string>)[p.key] ?? p.description}</p>
-                            {p.status_detail && p.status !== "connected" ? (
+                            <p className="text-xs text-muted-foreground">
+                              {platformAdmin
+                                ? ((t.providerDesc as Record<string, string>)[p.key] ?? p.description)
+                                : (t.customerSources[p.key]?.desc ?? "")}
+                            </p>
+                            {platformAdmin && p.status_detail && p.status !== "connected" ? (
                               <p className="text-xs text-warning">{p.status_detail}</p>
                             ) : null}
                           </div>
@@ -329,7 +352,9 @@ export function CampaignWizard() {
                   <p className="flex items-center gap-2 rounded-md bg-sun-500/10 p-3 text-xs">
                     <FlaskConical className="size-4 text-sun-500" /> {t.wizard.demoNote}
                   </p>
-                ) : null}
+                ) : (
+                  <OutOfCredits />
+                )}
               </div>
             )}
 
@@ -341,7 +366,6 @@ export function CampaignWizard() {
                     ["max_companies", t.wizard.maxCompanies],
                     ["max_pages_per_site", t.wizard.maxPages],
                     ["min_score", t.wizard.minScore],
-                    ["max_budget_usd", t.wizard.maxBudget],
                     ["max_runtime_minutes", t.wizard.maxRuntime],
                     ["concurrency", t.wizard.concurrency],
                   ] as const
@@ -388,11 +412,10 @@ export function CampaignWizard() {
                     [t.wizard.industry, industryName(values.industry)],
                     [t.wizard.keywords, values.keywords || "—"],
                     [t.wizard.services, (values.services ?? []).map(serviceName).join(sep) || "—"],
-                    [t.campaigns.sources, (values.sources ?? []).map((k) => label(k)).join(sep)],
+                    [t.campaigns.sources, (values.sources ?? []).map((k) => (platformAdmin ? label(k) : (t.customerSources[k]?.name ?? source(k)))).join(sep)],
                     [t.wizard.targetCount, `${values.target_count} (${t.wizard.maxCompanies}: ${values.max_companies})`],
                     [t.wizard.ai, values.ai_analysis ? t.common.yes : t.common.no],
                     [t.wizard.emailVerification, values.email_verification ? t.common.yes : t.common.no],
-                    [t.wizard.maxBudget, `$${values.max_budget_usd}`],
                   ].map(([k, v]) => (
                     <div key={String(k)} className="flex flex-col gap-0.5 border-b pb-2">
                       <dt className="text-xs text-muted-foreground">{k}</dt>
@@ -403,10 +426,19 @@ export function CampaignWizard() {
                 {estimate ? (
                   <div className="rounded-lg border bg-muted/50 p-4 text-sm">
                     <p className="mb-2 font-medium">{t.wizard.estimate}</p>
-                    <p>
-                      ~{estimate.estimated_requests} {t.wizard.providerRequests} ·{" "}
-                      {estimate.estimated_cost_usd !== null ? `~$${estimate.estimated_cost_usd}` : "—"}
-                    </p>
+                    {platformAdmin ? (
+                      <p>
+                        ~{estimate.estimated_requests} {t.wizard.providerRequests} ·{" "}
+                        {estimate.estimated_cost_usd !== null ? `~$${estimate.estimated_cost_usd}` : "—"}
+                      </p>
+                    ) : null}
+                    {estimate.credits_max > 0 ? (
+                      <p className="mt-1 font-medium">
+                        {t.wizard.creditsUpTo
+                          .replace("{n}", String(estimate.credits_max))
+                          .replace("{b}", String(estimate.credit_balance ?? 0))}
+                      </p>
+                    ) : null}
                     <ul className="mt-2 list-disc space-y-1 ps-5 text-xs text-muted-foreground">
                       {estimate.notes.map((n) => (
                         <li key={n}>{n}</li>
@@ -425,7 +457,7 @@ export function CampaignWizard() {
         </Card>
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-          <Button type="button" variant="ghost" onClick={() => (step === 0 ? router.push("/campaigns") : setStep(step - 1))}>
+          <Button type="button" variant="ghost" onClick={() => (step === 0 ? router.push("/app/campaigns") : setStep(step - 1))}>
             <ChevronLeft className="rtl:rotate-180" /> {step === 0 ? t.common.cancel : t.common.back}
           </Button>
           {step < 4 ? (
@@ -442,7 +474,7 @@ export function CampaignWizard() {
               >
                 <Save /> {t.wizard.saveDraft}
               </Button>
-              <Button type="submit" variant="accent" disabled={submit.isPending}>
+              <Button type="submit" variant="accent" disabled={submit.isPending || (!isDemo && noCredits)}>
                 {submit.isPending ? <Spinner /> : <Sparkles />} {t.wizard.startCampaign}
               </Button>
             </div>

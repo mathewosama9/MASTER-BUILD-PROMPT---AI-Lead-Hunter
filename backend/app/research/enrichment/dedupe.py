@@ -16,7 +16,7 @@ from app.research.enrichment.normalize import business_domain, normalize_phone
 from app.research.providers.base import BusinessCandidate
 
 # Source listing ids usable as identity keys, most specific first.
-LISTING_ID_KINDS = ("gmaps", "osm", "social")
+LISTING_ID_KINDS = ("gmaps", "osm", "social", "directory")
 
 
 @dataclass

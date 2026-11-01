@@ -5,12 +5,49 @@ AI output. It reasons only from observed website signals, with the same observed
 """
 
 from app.research.analysis.schemas import BusinessAnalysis, Hypothesis, ObservedSignal, ServiceRecommendation
-from app.research.catalog import INDUSTRIES, SERVICES
+from app.research.catalog import INDUSTRIES
+from app.research.catalog import LEGACY_SERVICES as SERVICES
 
 APPOINTMENT_INDUSTRIES = {"dental_clinics", "medical_clinics", "beauty_salons", "fitness", "legal", "automotive"}
 
+# The kind of need each observed-signal rule points to, as words an offering's name/description/keywords would use.
+# The rule-based analyzer recommends the seller's own offering that matches a need best; nothing else.
+NEED_WORDS: dict[str, list[str]] = {
+    "appointment_automation": ["booking", "appointment", "schedul", "reservation", "calendar", "حجز", "مواعيد", "موعد"],
+    "whatsapp_automation": ["whatsapp", "chatbot", "bot", "auto-reply", "واتساب", "بوت", "رد آلي", "الرد الآلي"],
+    "lead_management": ["lead", "sales", "pipeline", "follow-up", "مبيعات", "عملاء محتملين", "متابعة"],
+    "crm_integration": ["crm", "customer data", "integration", "erp", "أنظمة", "تكامل", "إدارة العملاء"],
+    "ai_support_agent": ["support", "customer service", "chat", "call center", "خدمة العملاء", "دعم", "شات"],
+    "ai_sales_assistant": ["sales assistant", "conversion", "upsell", "store", "مساعد مبيعات", "تحويل"],
+    "ecommerce_development": ["e-commerce", "ecommerce", "online store", "shop", "checkout", "متجر", "تجارة إلكترونية"],
+    "website_development": ["website", "web", "landing", "seo", "design", "موقع", "مواقع", "تصميم", "سيو"],
+    "process_automation": ["automation", "workflow", "process", "أتمتة", "سير العمل"],
+    "n8n_automation": ["n8n", "automation", "workflow", "أتمتة"],
+}
 
-def heuristic_analysis(*, business: dict, evidence: list[dict], target: dict) -> BusinessAnalysis:
+
+def _fold(text: str) -> str:
+    return (text or "").casefold()
+
+
+def resolve_offering(key: str, offerings: list[dict]) -> dict | None:
+    """The seller's offering for a need: the same id (legacy workspaces), else the best keyword match."""
+    for o in offerings:
+        if o.get("id") == key:
+            return o
+    words = NEED_WORDS.get(key, [])
+    best, best_hits = None, 0
+    for o in offerings:
+        hay = _fold(" ".join([o.get("name", ""), o.get("description", ""), " ".join(o.get("keywords") or [])]))
+        hits = sum(1 for w in words if w in hay)
+        if hits > best_hits:
+            best, best_hits = o, hits
+    return best
+
+
+def heuristic_analysis(
+    *, business: dict, evidence: list[dict], target: dict, seller: dict | None = None
+) -> BusinessAnalysis:
     sig = {e["signal"]: e for e in evidence if e.get("signal")}
     observed = {k for k, e in sig.items() if e.get("observed")}
     not_observed = {k for k, e in sig.items() if not e.get("observed")}
@@ -132,15 +169,25 @@ def heuristic_analysis(*, business: dict, evidence: list[dict], target: dict) ->
     if not evidence:
         unknowns.append("The website could not be inspected; no evidence is available.")
 
-    # Prefer services the user is selling.
-    recs.sort(key=lambda r: (r[0] in wanted, r[3]), reverse=True)
+    # Recommend what this seller sells: each need maps to the seller's matching offering (none = not recommended).
+    offerings = (seller or {}).get("offerings") or []
+    mapped: list[tuple[str, str, str, list[str], float]] = []
+    for key, why, ev, weight in recs:
+        if offerings:
+            o = resolve_offering(key, offerings)
+            if o is None:
+                continue
+            mapped.append((o["id"], o.get("name", ""), why, ev, weight))
+        else:  # no profile yet: the legacy service labels
+            mapped.append((key, SERVICES.get(key, {}).get("en", key), why, ev, weight))
+    mapped.sort(key=lambda r: (r[0] in wanted, r[4]), reverse=True)
     seen: set[str] = set()
     final: list[ServiceRecommendation] = []
-    for key, why, ev, _ in recs:
-        if key in seen:
+    for oid, name, why, ev, _ in mapped:
+        if oid in seen:
             continue
-        seen.add(key)
-        final.append(ServiceRecommendation(service=key, rationale=why, evidence_ids=[e for e in ev if e]))
+        seen.add(oid)
+        final.append(ServiceRecommendation(service=oid, name=name, rationale=why, evidence_ids=[e for e in ev if e]))
         if len(final) == 3:
             break
 
@@ -156,7 +203,7 @@ def heuristic_analysis(*, business: dict, evidence: list[dict], target: dict) ->
     characteristics_fit = (char_hits / len(chars)) if chars else 0.5
     confidence = min(0.25 + 0.06 * observed_count + 0.05 * len(page_ids), 0.8) if evidence else 0.1
     name = business.get("name") or "This business"
-    top = SERVICES[final[0].service]["en"] if final else None
+    top = (final[0].name or final[0].service) if final else None
     summary = (business.get("description") or f"{name} operates in {industry.replace('_', ' ')}.")[:400]
     return BusinessAnalysis(
         business_summary=summary,
@@ -186,8 +233,29 @@ def template_pitch(context: dict, language: str) -> dict[str, str]:
     """Non-AI fallback drafts built only from stored facts. Clearly generic; for human editing."""
     name = context.get("company") or "your team"
     service_key = context.get("service") or ""
-    service = SERVICES.get(service_key, {}).get("ar" if language == "ar" else "en", service_key or "automation")
+    service = (
+        context.get("service_name")
+        or SERVICES.get(service_key, {}).get("ar" if language == "ar" else "en")
+        or service_key
+        or ("خدماتنا" if language == "ar" else "our services")
+    )
     obs = (context.get("observations") or [None])[0]
+    if language == "ar" and (context.get("country") or "").upper() == "EG":
+        obs_line = f"لاحظنا في موقعكم: {obs}." if obs else ""
+        return {
+            "short_intro": f"أهلاً بفريق {name}، إحنا بنساعد شركات زيكم في {service}.",
+            "email_subject": f"فكرة بخصوص {service} لـ {name}",
+            "email_body": (
+                f"أهلاً بفريق {name}،\n\n{obs_line}\nإحنا بنساعد شركات شبهكم في {service} "
+                "بطريقة تمشي مع شغلكم الحالي. ممكن نتكلم 15 دقيقة نفهم احتياجاتكم؟\n\nمع خالص التحية\n\n"
+                'لو حضرتك مش حابب توصلك رسايل مننا، رد بكلمة "إلغاء".'
+            ),
+            "whatsapp_message": (
+                f"أهلاً بفريق {name} 👋 {obs_line} إحنا بنقدم {service}. ينفع نتكلم دقيقتين؟ (للإلغاء ابعت: إلغاء)"
+            ),
+            "follow_up": f"بتابع مع حضرتك رسالتي اللي فاتت بخصوص {service}. ينفع نتكلم الأسبوع ده؟",
+            "proposal_summary": f"مقترح مبدئي: نقيّم احتياجات {name} في {service} وبعدها تجربة صغيرة محددة.",
+        }
     if language == "ar":
         obs_line = f"لاحظنا في موقعكم: {obs}." if obs else ""
         return {
@@ -244,13 +312,11 @@ def rule_based_spec(text: str) -> dict:
             break
         if c["name_en"].lower() in low or c["name_ar"] in text:
             country = code
-    services = [
-        k
-        for k, v in SERVICES.items()
-        if any(w in low for w in v["en"].lower().split() if len(w) > 5) or v["ar"] in text
-    ]
+    services: list[str] = []  # offering ids are chosen in the wizard; keyword matching cannot know them
     return {
         "industry": industry or "medical_clinics",
+        # False when no industry was recognised and the default above is only a placeholder (the bot asks instead).
+        "industry_matched": industry is not None,
         "country": country,
         "city": city,
         "keywords": [],

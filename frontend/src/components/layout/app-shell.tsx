@@ -2,51 +2,87 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   Ban,
+  ChevronDown,
+  Coins,
   FlaskConical,
+  Globe,
   Languages,
   LayoutDashboard,
   LogOut,
-  Menu,
+  MessageSquareHeart,
+  MoreHorizontal,
   Moon,
   Plus,
   Radar,
   Settings,
+  ShieldCheck,
   Sun,
   Users,
+  Wallet,
   X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
+import { Dialog as RDialog, DropdownMenu as RMenu } from "radix-ui";
 import { Suspense, useEffect, useState, useSyncExternalStore } from "react";
+
+import { DemoBadge } from "@/components/badges";
+import { Lockup, LogoMark } from "@/components/brand/logo";
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/states";
+import { VerifyEmailBanner } from "@/features/auth/account-forms";
+import { ReviewDialog } from "@/features/dashboard/review";
+import { useBillingSummary, useMe } from "@/hooks/queries";
+import { useI18n } from "@/i18n/provider";
+import { api } from "@/lib/api";
+import { cn, formatNumber } from "@/lib/utils";
 
 const noopSubscribe = () => () => {};
 
-import { DemoBadge } from "@/components/badges";
-import { LogoMark } from "@/components/layout/logo";
-import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/states";
-import { useMe } from "@/hooks/queries";
-import { useI18n } from "@/i18n/provider";
-import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
-
-const NAV = [
-  { href: "/", key: "overview", icon: LayoutDashboard },
-  { href: "/campaigns", key: "campaigns", icon: Radar },
-  { href: "/leads", key: "leads", icon: Users },
-  { href: "/suppression", key: "suppression", icon: Ban },
-  { href: "/settings", key: "settings", icon: Settings },
+// Daily work first (home, the leads to call, the searches); account pages below a divider.
+const NAV_PRIMARY = [
+  { href: "/app", key: "overview", icon: LayoutDashboard },
+  { href: "/app/leads", key: "leads", icon: Users },
+  { href: "/app/campaigns", key: "campaigns", icon: Radar },
 ] as const;
 
+const NAV_SECONDARY = [
+  { href: "/app/billing", key: "billing", icon: Wallet },
+  { href: "/app/settings", key: "settings", icon: Settings },
+  { href: "/app/suppression", key: "suppression", icon: Ban },
+] as const;
+
+const ADMIN_NAV = { href: "/app/admin", key: "admin", icon: ShieldCheck } as const;
+
+type NavItem = { href: string; key: keyof ReturnType<typeof useI18n>["t"]["nav"]; icon: React.ComponentType<{ className?: string }> };
+
+function isActive(pathname: string, href: string) {
+  return href === "/app" ? pathname === "/app" : pathname.startsWith(href) && !(href === "/app/campaigns" && pathname === "/app/campaigns/new");
+}
+
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+  const { t } = useI18n();
+  const { data: me } = useMe();
+  const secondary: readonly NavItem[] = me?.user.is_superuser ? [...NAV_SECONDARY, ADMIN_NAV] : NAV_SECONDARY;
+  return (
+    <nav className="flex flex-col gap-0.5" aria-label={t.common.mainNav}>
+      <NavGroup items={NAV_PRIMARY} onNavigate={onNavigate} />
+      <div className="mx-3 my-3 h-px bg-white/10" aria-hidden />
+      <NavGroup items={secondary} onNavigate={onNavigate} />
+    </nav>
+  );
+}
+
+function NavGroup({ items, onNavigate }: { items: readonly NavItem[]; onNavigate?: () => void }) {
   const pathname = usePathname();
   const { t } = useI18n();
   return (
-    <nav className="flex flex-col gap-1" aria-label={t.common.mainNav}>
-      {NAV.map(({ href, key, icon: Icon }) => {
-        const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+    <>
+      {items.map(({ href, key, icon: Icon }) => {
+        const active = isActive(pathname, href);
         return (
           <Link
             key={href}
@@ -54,52 +90,155 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "group flex items-center gap-3 rounded-md px-3 py-2 text-sm text-sidebar-muted transition-colors hover:bg-white/5 hover:text-sidebar-foreground",
-              active && "bg-brand-500/15 text-sidebar-foreground shadow-[inset_3px_0_0_var(--color-sun-500)] rtl:shadow-[inset_-3px_0_0_var(--color-sun-500)]",
+              "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-sidebar-muted transition-colors hover:bg-white/5 hover:text-sidebar-foreground",
+              active && "bg-white/[0.08] font-medium text-sidebar-foreground",
             )}
           >
-            <Icon className={cn("size-4", active ? "text-sun-500" : "text-sidebar-muted group-hover:text-brand-400")} />
+            <Icon className={cn("size-4", active ? "text-signal-400" : "text-sidebar-muted group-hover:text-rasd-300")} />
             {t.nav[key]}
+            {active ? <span aria-hidden className="ms-auto size-1.5 rounded-full bg-signal-400" /> : null}
           </Link>
         );
       })}
+    </>
+  );
+}
+
+/** Thumb-reach navigation on phones: the daily pages, a raised "new search" button, and "more" for the rest. */
+function BottomNav({ onMore }: { onMore: () => void }) {
+  const pathname = usePathname();
+  const { t } = useI18n();
+  const tab = "flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
+  const link = (href: string, key: NavItem["key"], Icon: NavItem["icon"]) => {
+    const active = isActive(pathname, href);
+    return (
+      <Link href={href} aria-current={active ? "page" : undefined} className={cn(tab, active ? "font-medium text-foreground" : "text-muted-foreground")}>
+        <Icon className={cn("size-5", active && "text-rasd-600 dark:text-signal-400")} />
+        {t.nav[key]}
+      </Link>
+    );
+  };
+  return (
+    <nav
+      aria-label={t.common.mainNav}
+      className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+    >
+      {link("/app", "overview", LayoutDashboard)}
+      {link("/app/leads", "leads", Users)}
+      <Link href="/app/campaigns/new" className={cn(tab, "text-foreground")} aria-label={t.nav.newCampaign}>
+        <span className="-mt-6 flex size-12 items-center justify-center rounded-full bg-signal-400 text-ink-900 shadow-lg shadow-ink-900/20 ring-4 ring-background">
+          <Plus className="size-6" />
+        </span>
+        <span className="max-w-20 truncate">{t.nav.newCampaign}</span>
+      </Link>
+      {link("/app/campaigns", "campaigns", Radar)}
+      <button type="button" onClick={onMore} className={cn(tab, "text-muted-foreground")}>
+        <MoreHorizontal className="size-5" />
+        {t.nav.more}
+      </button>
     </nav>
   );
 }
 
-function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
-  const { t } = useI18n();
+/** Balance at a glance in the sidebar, with the trial countdown and a top-up shortcut. */
+function CreditCard({ onNavigate }: { onNavigate?: () => void }) {
+  const { t, locale } = useI18n();
+  const { data: s } = useBillingSummary();
+  if (!s) return <div className="h-28" />;
+  if (s.billing_exempt) {
+    return <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-sidebar-muted">{t.common.unlimited}</div>;
+  }
+  const warn = s.low_balance || s.trial_expired;
   return (
-    <div className="flex h-full flex-col gap-6 bg-sidebar p-4 text-sidebar-foreground">
-      <Link href="/" className="flex items-center gap-2.5 px-1" onClick={onNavigate}>
-        <LogoMark className="size-9" />
-        <div className="leading-tight">
-          <p className="font-semibold tracking-tight">{t.appName}</p>
-          <p className="text-[11px] text-sidebar-muted">{t.tagline}</p>
-        </div>
+    <div className={cn("rounded-xl border p-4", warn ? "border-sun-500/40 bg-sun-500/10" : "border-white/10 bg-white/5")}>
+      <p className="flex items-center gap-1.5 text-xs text-sidebar-muted">
+        {warn ? <AlertTriangle className="size-3.5 text-sun-400" aria-hidden /> : <Coins className="size-3.5" aria-hidden />}
+        {s.trial_expired ? t.billing.badgeTrialEnded : t.common.creditsLeft}
+      </p>
+      <p className="mt-1 font-display text-2xl font-bold tabular-nums text-sidebar-foreground">{formatNumber(s.balance, locale)}</p>
+      {s.on_trial && s.trial_days_left !== null && !s.trial_expired ? (
+        <p className="text-[11px] text-sidebar-muted">{t.common.trialLeft.replace("{n}", String(s.trial_days_left))}</p>
+      ) : null}
+      <Button asChild size="sm" variant="accent" className="mt-3 w-full">
+        <Link href="/app/billing" onClick={onNavigate}>
+          {t.common.topUp}
+        </Link>
+      </Button>
+    </div>
+  );
+}
+
+function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+  const { t, locale } = useI18n();
+  return (
+    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-sidebar p-4 text-sidebar-foreground">
+      <Link href="/app" className="px-1 pt-1" onClick={onNavigate} aria-label={t.appName}>
+        <Lockup locale={locale} markClassName="size-9" />
       </Link>
       <Button asChild variant="accent" className="justify-start">
-        <Link href="/campaigns/new" onClick={onNavigate}>
+        <Link href="/app/campaigns/new" onClick={onNavigate}>
           <Plus /> {t.nav.newCampaign}
         </Link>
       </Button>
       <Suspense fallback={<div className="h-48" />}>
         <NavLinks onNavigate={onNavigate} />
       </Suspense>
-      <div className="mt-auto rounded-lg border border-white/10 bg-white/5 p-3 text-[11px] text-sidebar-muted">
-        {t.common.sidebarNote}
+      <div className="mt-auto">
+        <CreditCard onNavigate={onNavigate} />
       </div>
     </div>
   );
 }
 
-function TopBar({ onMenu }: { onMenu: () => void }) {
+/** Compact balance chip for the top bar on small screens, where the sidebar is hidden. */
+function CreditBadge() {
+  const { t, locale } = useI18n();
+  const { data: s } = useBillingSummary();
+  if (!s || s.billing_exempt) return null;
+  const warn = s.low_balance || s.trial_expired;
+  const text = s.awaiting_verification
+    ? t.account.badgeConfirm
+    : s.trial_expired
+      ? t.billing.badgeTrialEnded
+      : t.billing.badge.replace("{n}", formatNumber(s.balance, locale));
+  return (
+    <Link
+      href="/app/billing"
+      title={s.low_balance && !s.trial_expired && !s.awaiting_verification ? t.billing.lowBalance : undefined}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium tabular-nums transition-colors md:hidden",
+        s.trial_expired
+          ? "border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300"
+          : warn
+            ? "border-sun-500/50 bg-sun-500/10 text-[#7a5700] dark:text-sun-400"
+            : "border-border hover:bg-muted",
+      )}
+    >
+      {warn ? <AlertTriangle className="size-3.5" aria-hidden /> : <Coins className="size-3.5" aria-hidden />}
+      {text}
+    </Link>
+  );
+}
+
+function initials(name: string) {
+  return name
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase())
+    .join("");
+}
+
+function UserMenu() {
   const { t, locale, setLocale, label } = useI18n();
   const { resolvedTheme, setTheme } = useTheme();
   const { data: me } = useMe();
   const router = useRouter();
   const qc = useQueryClient();
   const mounted = useSyncExternalStore(noopSubscribe, () => true, () => false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const name = me?.user.full_name || me?.user.email || "";
+  const dark = mounted && resolvedTheme === "dark";
 
   async function logout() {
     await api("/auth/logout", { method: "POST" }).catch(() => undefined);
@@ -107,37 +246,95 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
     router.replace("/login");
   }
 
+  const item =
+    "flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2.5 py-2 text-sm outline-none data-[highlighted]:bg-muted";
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur md:px-6">
-      <Button variant="ghost" size="icon" className="md:hidden" onClick={onMenu} aria-label={t.common.openMenu}>
-        <Menu />
-      </Button>
-      <div className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{me?.workspace_name}</div>
+    <>
+      <RMenu.Root dir={locale === "ar" ? "rtl" : "ltr"}>
+        <RMenu.Trigger className="flex items-center gap-2 rounded-full p-1 pe-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <span className="flex size-8 items-center justify-center rounded-full bg-ink-900 font-display text-xs font-semibold text-signal-400">
+            {initials(name)}
+          </span>
+          <span className="hidden text-start text-xs leading-tight sm:block">
+            <span className="block max-w-36 truncate font-medium">{name}</span>
+            <span className="block text-muted-foreground">{me?.role ? label(me.role) : null}</span>
+          </span>
+          <ChevronDown className="size-3.5 text-muted-foreground" aria-hidden />
+        </RMenu.Trigger>
+        <RMenu.Portal>
+          <RMenu.Content align="end" sideOffset={8} className="z-50 w-60 rounded-xl border bg-card p-1.5 text-card-foreground shadow-xl">
+            <div className="px-2.5 py-2">
+              <p className="truncate text-sm font-medium">{name}</p>
+              <p className="truncate text-xs text-muted-foreground">{me?.workspace_name}</p>
+            </div>
+            <RMenu.Separator className="my-1 h-px bg-border" />
+            <RMenu.Item className={item} onSelect={() => setLocale(locale === "en" ? "ar" : "en")}>
+              <Languages className="size-4" /> {locale === "en" ? "العربية" : "English"}
+            </RMenu.Item>
+            <RMenu.Item className={item} onSelect={() => setTheme(dark ? "light" : "dark")}>
+              {dark ? <Sun className="size-4" /> : <Moon className="size-4" />} {dark ? t.common.lightMode : t.common.darkMode}
+            </RMenu.Item>
+            <RMenu.Item className={item} onSelect={() => setReviewOpen(true)}>
+              <MessageSquareHeart className="size-4" /> {t.common.rateUs}
+            </RMenu.Item>
+            <RMenu.Item asChild className={item}>
+              <Link href="/">
+                <Globe className="size-4" /> {t.common.website}
+              </Link>
+            </RMenu.Item>
+            <RMenu.Separator className="my-1 h-px bg-border" />
+            <RMenu.Item className={cn(item, "text-destructive")} onSelect={() => void logout()}>
+              <LogOut className="size-4" /> {t.nav.logout}
+            </RMenu.Item>
+          </RMenu.Content>
+        </RMenu.Portal>
+      </RMenu.Root>
+      <ReviewDialog open={reviewOpen} onOpenChange={setReviewOpen} />
+    </>
+  );
+}
+
+function TopBar() {
+  const { t } = useI18n();
+  const { data: me } = useMe();
+  return (
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/85 px-4 backdrop-blur md:h-16 md:px-6">
+      {/* Phones navigate from the bottom bar; the top keeps only the brand, balance and account. */}
+      <Link href="/app" className="md:hidden" aria-label={t.appName}>
+        <LogoMark className="size-8" />
+      </Link>
+      <div className="min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground">{me?.workspace_name}</div>
+      <CreditBadge />
       {me?.demo_mode ? <DemoBadge /> : null}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setLocale(locale === "en" ? "ar" : "en")}
-        aria-label={t.common.language}
-      >
-        <Languages /> {locale === "en" ? "العربية" : "English"}
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label={t.common.theme}
-        onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-      >
-        {mounted && resolvedTheme === "dark" ? <Sun /> : <Moon />}
-      </Button>
-      <div className="hidden text-end text-xs leading-tight sm:block">
-        <p className="font-medium">{me?.user.full_name || me?.user.email}</p>
-        <p className="text-muted-foreground capitalize">{me?.role ? label(me.role) : null}</p>
-      </div>
-      <Button variant="ghost" size="icon" onClick={logout} aria-label={t.nav.logout}>
-        <LogOut />
-      </Button>
+      <UserMenu />
     </header>
+  );
+}
+
+function EmailStrip({ email }: { email: string }) {
+  const { data: s } = useBillingSummary();
+  return <VerifyEmailBanner email={email} trialPending={!!s?.awaiting_verification} />;
+}
+
+/** Mobile navigation drawer with focus trap and Escape-to-close (Radix Dialog). */
+function MobileNav({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { t } = useI18n();
+  return (
+    <RDialog.Root open={open} onOpenChange={onOpenChange}>
+      <RDialog.Portal>
+        <RDialog.Overlay className="fixed inset-0 z-50 bg-ink-950/60 backdrop-blur-sm md:hidden" />
+        <RDialog.Content className="fixed inset-y-0 start-0 z-50 w-72 shadow-2xl md:hidden">
+          <RDialog.Title className="sr-only">{t.common.mainNav}</RDialog.Title>
+          <RDialog.Description className="sr-only">{t.common.mainNav}</RDialog.Description>
+          <Sidebar onNavigate={() => onOpenChange(false)} />
+          <RDialog.Close asChild>
+            <Button variant="ghost" size="icon" className="absolute end-2 top-3 text-sidebar-foreground hover:bg-white/10" aria-label={t.common.closeMenu}>
+              <X />
+            </Button>
+          </RDialog.Close>
+        </RDialog.Content>
+      </RDialog.Portal>
+    </RDialog.Root>
   );
 }
 
@@ -164,32 +361,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="fixed inset-y-0 start-0 z-40 hidden w-64 md:block">
         <Sidebar />
       </aside>
-      {open ? (
-        <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-navy-950/60" onClick={() => setOpen(false)} />
-          <div className="absolute inset-y-0 start-0 w-72 shadow-xl">
-            <Sidebar onNavigate={() => setOpen(false)} />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute end-2 top-2 text-sidebar-foreground"
-              onClick={() => setOpen(false)}
-              aria-label={t.common.closeMenu}
-            >
-              <X />
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <MobileNav open={open} onOpenChange={setOpen} />
+      <BottomNav onMore={() => setOpen(true)} />
       <div className="flex min-w-0 flex-1 flex-col md:ms-64">
-        <TopBar onMenu={() => setOpen(true)} />
+        <TopBar />
         {me.demo_mode ? (
           <div className="flex items-center gap-2 border-b border-sun-500/30 bg-sun-500/10 px-4 py-2 text-xs text-foreground md:px-6">
             <FlaskConical className="size-3.5 text-sun-500" aria-hidden />
             {t.common.demoBanner}
           </div>
         ) : null}
-        <main className="mx-auto w-full max-w-[1400px] flex-1 p-4 md:p-6">{children}</main>
+        {me.user.email_verified_at === null ? <EmailStrip email={me.user.email} /> : null}
+        <main className="mx-auto w-full max-w-[1400px] flex-1 p-4 pb-28 md:p-6">{children}</main>
       </div>
     </div>
   );

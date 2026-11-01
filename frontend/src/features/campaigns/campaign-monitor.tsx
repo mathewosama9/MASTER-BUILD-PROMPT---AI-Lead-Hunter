@@ -8,7 +8,8 @@ import { DemoBadge, StatusBadge } from "@/components/badges";
 import { PageHeader } from "@/components/layout/app-shell";
 import { Badge, Card, CardContent, CardHeader, CardTitle, Progress } from "@/components/ui/primitives";
 import { ErrorState, LoadingState } from "@/components/ui/states";
-import { ACTIVE, useCampaignLive, useMeta } from "@/hooks/queries";
+import { OutOfCredits } from "@/features/billing/out-of-credits";
+import { ACTIVE, useCampaignLive, useMeta, usePlatformAdmin } from "@/hooks/queries";
 import { useI18n } from "@/i18n/provider";
 import { formatDate, formatMoney } from "@/lib/utils";
 
@@ -28,7 +29,8 @@ function Metric({ label, value, hint }: { label: string; value: React.ReactNode;
 }
 
 export function CampaignMonitor({ id }: { id: string }) {
-  const { t, locale, label, eventText } = useI18n();
+  const { t, locale, label, source, eventText } = useI18n();
+  const platformAdmin = usePlatformAdmin();
   const { data: meta } = useMeta();
   const { campaign, events, live, transport } = useCampaignLive(id);
   const logRef = useRef<HTMLOListElement>(null);
@@ -57,7 +59,7 @@ export function CampaignMonitor({ id }: { id: string }) {
         <StatusBadge status={c.status} />
         {c.is_demo ? <DemoBadge /> : null}
         <Badge tone="neutral">{t.monitor.origin}: {label(c.origin)}</Badge>
-        {s.ai_provider ? <Badge tone={s.ai_provider === "heuristic" ? "yellow" : "indigo"}>{t.monitor.analysis}: {label(s.ai_provider)}</Badge> : null}
+        {s.ai_provider ? <Badge tone={s.ai_provider === "heuristic" ? "yellow" : "indigo"}>{t.monitor.analysis}: {source(s.ai_provider)}</Badge> : null}
         {running ? (
           <Badge tone="blue">
             <Radio className="size-3" /> {transport === "sse" ? t.monitor.liveSse : t.monitor.livePolling}
@@ -100,7 +102,7 @@ export function CampaignMonitor({ id }: { id: string }) {
               </span>
             </div>
             <Progress value={c.status === "draft" ? 0 : s.progress?.percent ?? null} label={t.campaigns.progress} />
-            {live.provider ? <p className="mt-1.5 text-xs text-muted-foreground">{t.monitor.provider}: {label(live.provider)}</p> : null}
+            {live.provider ? <p className="mt-1.5 text-xs text-muted-foreground">{t.monitor.provider}: {source(live.provider)}</p> : null}
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
             <Metric label={t.campaigns.requestedVsFound} value={`${s.target ?? c.settings.target_count} / ${s.unique_leads ?? 0}`} />
@@ -110,10 +112,14 @@ export function CampaignMonitor({ id }: { id: string }) {
             <Metric label={t.monitor.emails} value={s.emails_found ?? 0} hint={`${t.monitor.verified}: ${s.verified_emails ?? 0}`} />
             <Metric label={t.monitor.analyses} value={s.analyzed ?? 0} />
             <Metric label={t.campaigns.qualified} value={s.qualified ?? 0} hint={`${t.monitor.high}: ${s.high_priority ?? 0}`} />
-            <Metric label={t.campaigns.cost} value={formatMoney(c.cost_discovery + c.cost_ai)}
-                    hint={`${t.labels.ai} ${formatMoney(c.cost_ai)}`} />
+            {platformAdmin ? (
+              <Metric label={t.campaigns.cost} value={formatMoney(c.cost_discovery + c.cost_ai)} hint={`${t.labels.ai} ${formatMoney(c.cost_ai)}`} />
+            ) : null}
           </div>
-          {c.last_error ? (
+          {/* Stopped for lack of credits: offer the top-up. Other technical reasons (which provider failed) are
+              for platform admins; customers already see the "partially completed" status. */}
+          {c.last_error?.includes("Credits exhausted") ? <OutOfCredits stopped /> : null}
+          {c.last_error && platformAdmin && !c.last_error.includes("Credits exhausted") ? (
             <p className="flex items-start gap-2 rounded-md border border-sun-500/30 bg-sun-500/10 p-3 text-xs">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" /> {c.last_error}
             </p>
@@ -124,7 +130,7 @@ export function CampaignMonitor({ id }: { id: string }) {
               <ul className="space-y-1.5">
                 {c.sources.map((src) => (
                   <li key={src.provider_key} className="flex items-center justify-between gap-2 rounded-md border p-2 text-xs">
-                    <span className="font-medium">{label(src.provider_key)}</span>
+                    <span className="font-medium">{source(src.provider_key)}</span>
                     <span className="flex items-center gap-2 text-muted-foreground">
                       {src.results_count} {t.monitor.results}
                       <Badge tone={src.status === "done" ? "green" : src.status === "failed" ? "red" : src.status === "skipped" ? "yellow" : "neutral"}>
@@ -180,7 +186,7 @@ export function CampaignMonitor({ id }: { id: string }) {
         <Card className="xl:col-span-2">
           <CardHeader className="flex-row items-center justify-between">
             <CardTitle>{t.campaigns.results}</CardTitle>
-            <Link href={`/leads?campaign_id=${c.id}`} className="text-xs text-primary hover:underline">
+            <Link href={`/app/leads?campaign_id=${c.id}`} className="text-xs text-primary hover:underline">
               {t.campaigns.viewResults} →
             </Link>
           </CardHeader>

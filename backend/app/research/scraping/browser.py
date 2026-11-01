@@ -10,12 +10,11 @@ import random
 from typing import Any, Protocol
 
 from app.core.config import get_settings
+from app.research.geo import Place, country_place
 from app.research.scraping.parsers import ScrapeBlocked, is_blocked
 from app.research.scraping.selectors import MAPS
 
 log = logging.getLogger(__name__)
-
-LOCALES = {"SA": ("en-SA", "Asia/Riyadh"), "AE": ("en-AE", "Asia/Dubai"), "EG": ("en-EG", "Africa/Cairo")}
 
 
 class PageSource(Protocol):
@@ -34,10 +33,16 @@ class BrowserUnavailable(Exception):
 
 class BrowserSession:
     def __init__(
-        self, country: str | None = None, max_pages: int | None = None, sessions: dict[str, dict] | None = None
+        self,
+        country: str | None = None,
+        max_pages: int | None = None,
+        sessions: dict[str, dict] | None = None,
+        place: Place | None = None,
     ) -> None:
         s = get_settings()
-        self.locale, self.timezone = LOCALES.get((country or "").upper(), ("en-US", "UTC"))
+        # Browse as a user inside the target market: its timezone and region, the city as geolocation.
+        self.place = place or country_place(country)
+        self.locale, self.timezone = self.place.browser_locale, self.place.timezone
         self.max_pages = max_pages or s.scraper_max_places_per_campaign * 2
         self.pages_opened = 0
         self._pw: Any = None
@@ -63,9 +68,7 @@ class BrowserSession:
         except Exception as exc:  # noqa: BLE001 - missing browser binary etc.
             await self._pw.stop()
             raise BrowserUnavailable(f"Chromium could not start: {exc}") from exc
-        self._context = await self._browser.new_context(
-            locale=self.locale, timezone_id=self.timezone, viewport={"width": 1280, "height": 900}
-        )
+        self._context = await self._browser.new_context(**self._context_options())
         self._context.set_default_timeout(s.scraper_page_timeout_seconds * 1000)
         self._page = await self._context.new_page()
         return self._page
@@ -74,15 +77,22 @@ class BrowserSession:
         if platform in self._session_pages:
             return self._session_pages[platform]
         await self._ensure()
-        ctx = await self._browser.new_context(
-            locale=self.locale,
-            timezone_id=self.timezone,
-            viewport={"width": 1280, "height": 900},
-            storage_state=self.sessions[platform],
-        )
+        ctx = await self._browser.new_context(**self._context_options(), storage_state=self.sessions[platform])
         ctx.set_default_timeout(get_settings().scraper_page_timeout_seconds * 1000)
         self._session_pages[platform] = await ctx.new_page()
         return self._session_pages[platform]
+
+    def _context_options(self) -> dict[str, Any]:
+        opts: dict[str, Any] = {
+            "locale": self.locale,
+            "timezone_id": self.timezone,
+            "viewport": {"width": 1280, "height": 900},
+            "extra_http_headers": {"Accept-Language": self.place.accept_language},
+        }
+        if self.place.lat or self.place.lon:
+            opts["geolocation"] = {"latitude": self.place.lat, "longitude": self.place.lon}
+            opts["permissions"] = ["geolocation"]
+        return opts
 
     async def _pause(self) -> None:
         s = get_settings()

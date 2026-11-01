@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound
-from app.models import Campaign, CampaignLead, CampaignRun, CampaignSource
+from app.models import Campaign, CampaignLead, CampaignRun, CampaignSource, Workspace
 from app.models.enums import ACTIVE_STATUSES, CampaignStatus, Stage
 from app.research.pipeline import DEFAULT_SETTINGS, start_new_run
 from app.schemas.campaign import CampaignCreate
+from app.services import credits as credit_svc
 from app.services.events import emit, publish
 
 
@@ -81,6 +82,15 @@ async def create_campaign(
     return campaign
 
 
+async def ensure_can_run(db: AsyncSession, campaign: Campaign) -> None:
+    """Paid runs need credits (and an unexpired trial while on trial). Demo campaigns are free."""
+    if campaign.is_demo:
+        return
+    workspace = await db.get(Workspace, campaign.workspace_id)
+    await db.refresh(workspace, attribute_names=["credit_balance", "trial_ends_at", "billing_exempt", "suspended_at"])
+    await credit_svc.ensure_can_spend(db, workspace)
+
+
 async def start_campaign(db: AsyncSession, campaign: Campaign) -> CampaignRun:
     if campaign.status in ACTIVE_STATUSES:
         raise Conflict("Campaign is already running")
@@ -88,6 +98,7 @@ async def start_campaign(db: AsyncSession, campaign: Campaign) -> CampaignRun:
         raise Conflict("Campaign is paused; use resume")
     if campaign.status not in (CampaignStatus.DRAFT,):
         raise Conflict("Only draft campaigns can be started; duplicate or retry finished campaigns")
+    await ensure_can_run(db, campaign)
     run = await start_new_run(db, campaign)
     campaign.status = CampaignStatus.QUEUED
     campaign.stage = Stage.CREATED.value
@@ -136,6 +147,7 @@ async def pause_campaign(db: AsyncSession, campaign: Campaign) -> None:
 async def resume_campaign(db: AsyncSession, campaign: Campaign) -> CampaignRun:
     if campaign.status != CampaignStatus.PAUSED:
         raise Conflict("Only paused campaigns can be resumed")
+    await ensure_can_run(db, campaign)
     run = await latest_run(db, campaign.id)
     if run is None or run.finished_at is not None:
         run = await start_new_run(db, campaign)
@@ -184,6 +196,7 @@ async def retry_failures(db: AsyncSession, campaign: Campaign) -> CampaignRun:
     """Start a new run that re-attempts failed/skipped sources and failed leads, keeping everything else."""
     if campaign.status not in (CampaignStatus.FAILED, CampaignStatus.PARTIALLY_COMPLETED, CampaignStatus.CANCELLED):
         raise Conflict("Only failed, partially completed or cancelled campaigns can be retried")
+    await ensure_can_run(db, campaign)
     prev = await latest_run(db, campaign.id)
     for s in campaign.sources:
         if s.status in ("failed", "skipped", "running", "pending"):

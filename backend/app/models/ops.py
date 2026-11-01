@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, JSONType, Timestamps, UUIDPk
@@ -20,10 +20,24 @@ class SuppressionEntry(UUIDPk, Timestamps, Base):
 
 
 class ProviderConfiguration(UUIDPk, Timestamps, Base):
-    __tablename__ = "provider_configurations"
-    __table_args__ = (UniqueConstraint("workspace_id", "provider_key"),)
+    """Provider settings and encrypted credentials.
 
-    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    `workspace_id IS NULL` is the platform-wide row, managed by platform admins only and used by every workspace.
+    A workspace row (legacy, from before keys were centralised) still wins for that workspace when present.
+    """
+
+    __tablename__ = "provider_configurations"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "provider_key"),
+        Index(
+            "uq_provider_configurations_platform_key",
+            "provider_key",
+            unique=True,
+            postgresql_where=text("workspace_id IS NULL"),
+        ),
+    )
+
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     provider_key: Mapped[str] = mapped_column(String(40))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # Fernet-encrypted JSON of credentials. Never returned by the API.

@@ -6,7 +6,7 @@ from app.api.deps import DB, CurrentPrincipal, audit, require_role
 from app.core.config import get_settings
 from app.models import AuditLog, Workspace
 from app.models.enums import Role
-from app.research.catalog import COUNTRIES, INDUSTRIES, SERVICES
+from app.research.catalog import COUNTRIES, INDUSTRIES, INDUSTRY_GROUPS, LEGACY_SERVICES, PROVIDER_CATEGORIES
 from app.research.scoring.scorer import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS, SCORING_VERSION
 
 router = APIRouter(tags=["settings"])
@@ -36,8 +36,21 @@ async def meta() -> dict:
             }
             for c in COUNTRIES.values()
         ],
-        "industries": [{"key": i["key"], "en": i["en"], "ar": i["ar"]} for i in INDUSTRIES.values()],
-        "services": [{"key": k, **v} for k, v in SERVICES.items()],
+        "industries": [
+            {"key": i["key"], "en": i["en"], "ar": i["ar"], "group": i.get("group")} for i in INDUSTRIES.values()
+        ],
+        "industry_groups": [{"key": k, **v} for k, v in INDUSTRY_GROUPS.items()],
+        "provider_categories": [
+            {
+                "key": k,
+                "en": c["en"],
+                "ar": c["ar"],
+                "offerings": [{"en": en, "ar": ar} for en, ar in c["offerings"]],
+                "targets": c["targets"],
+            }
+            for k, c in PROVIDER_CATEGORIES.items()
+        ],
+        "services": [{"key": k, **v} for k, v in LEGACY_SERVICES.items()],
         "scoring": {"weights": DEFAULT_WEIGHTS, "thresholds": DEFAULT_THRESHOLDS, "version": SCORING_VERSION},
     }
 

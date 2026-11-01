@@ -23,7 +23,15 @@ from app.models import (
     SuppressionEntry,
     Workspace,
 )
-from app.models.enums import ContactType, CrmStatus, Role, SuppressionKind, VerificationStatus
+from app.models.enums import (
+    ACTIVE_STATUSES,
+    CampaignStatus,
+    ContactType,
+    CrmStatus,
+    Role,
+    SuppressionKind,
+    VerificationStatus,
+)
 from app.research.analysis.ai_service import AI_PROVIDERS, AIRefused, AIService, AIUnavailable
 from app.research.analysis.heuristic import template_pitch
 from app.research.enrichment.normalize import (
@@ -32,7 +40,7 @@ from app.research.enrichment.normalize import (
     normalize_name,
     normalize_phone,
 )
-from app.research.pipeline import CampaignPipeline
+from app.research.pipeline import CampaignPipeline, StopRun
 from app.schemas.common import Message, Page
 from app.schemas.lead import (
     ActivityOut,
@@ -55,8 +63,11 @@ from app.schemas.lead import (
     SuppressionOut,
     TagIn,
 )
+from app.services import campaigns as campaign_svc
+from app.services import credits as credit_svc
 from app.services import providers as provider_svc
 from app.services.leads import LeadFilters, get_business, paged_leads
+from app.services.profile import get_profile, offering_map, offering_name
 from app.services.suppression import (
     apply_suppression,
     business_is_suppressed,
@@ -493,6 +504,19 @@ async def generate_pitch(lead_id: uuid.UUID, body: PitchIn, p: CurrentPrincipal,
         .limit(1)
     )
     service = body.service or (a.recommended_services[0]["service"] if a and a.recommended_services else None)
+    profile = await get_profile(db, p.workspace_id)
+    offering = offering_map(profile).get(service or "")
+    snapshot = next((r.get("name") for r in (a.recommended_services if a else []) if r.get("service") == service), None)
+    person = await db.scalar(
+        select(BusinessContact)
+        .where(
+            BusinessContact.business_id == b.id,
+            BusinessContact.type == ContactType.PERSON,
+            BusinessContact.is_suppressed.is_(False),
+        )
+        .order_by(BusinessContact.confidence.desc())
+        .limit(1)
+    )
     context = {
         "company": b.name,
         "website": b.website_url,
@@ -503,6 +527,13 @@ async def generate_pitch(lead_id: uuid.UUID, body: PitchIn, p: CurrentPrincipal,
         "observations": [s["signal"] for s in (a.observed_signals if a else [])][:5],
         "potential_needs": (a.potential_problems if a else [])[:3],
         "service": service,
+        "service_name": (offering or {}).get("name") or snapshot or offering_name({}, service, body.language),
+        "offering_description": (offering or {}).get("description") or None,
+        "seller_company": profile.company_name or None,
+        "seller_value_proposition": profile.value_proposition or None,
+        "decision_maker": (
+            {"name": person.person_name, "role": person.person_role} if person and person.person_name else None
+        ),
         "opportunity": a.opportunity if a else None,
     }
     creds = {}
@@ -519,7 +550,8 @@ async def generate_pitch(lead_id: uuid.UUID, body: PitchIn, p: CurrentPrincipal,
                 language=body.language,
                 tone=body.tone,
                 length=body.length,
-                sender=p.user.full_name or "our team",
+                sender=" - ".join(x for x in (profile.sender_name or p.user.full_name, profile.company_name) if x)
+                or "our team",
             )
             draft_data = result.output.model_dump()
             provider, cost = result.provider, result.cost_usd
@@ -563,9 +595,12 @@ async def reanalyze(lead_id: uuid.UUID, p: CurrentPrincipal, db: DB) -> Message:
         raise NotFound("This lead is not part of any campaign; add it to a campaign to analyse it")
 
     campaign = await db.get(Campaign, lead.campaign_id)
+    if campaign.status in ACTIVE_STATUSES:
+        raise Conflict("The campaign is running; re-analyse this lead after it finishes")
+    if campaign.status == CampaignStatus.CANCELLED:
+        raise Conflict("The campaign was cancelled; leads of a cancelled campaign cannot be re-analysed")
+    await campaign_svc.ensure_can_run(db, campaign)  # AI analysis is paid work too
     await db.refresh(campaign, attribute_names=["sources"])
-    lead.analyzed = False
-    lead.scored = False
     run = await db.scalar(
         select(CampaignRun)
         .where(CampaignRun.campaign_id == campaign.id)
@@ -574,14 +609,21 @@ async def reanalyze(lead_id: uuid.UUID, p: CurrentPrincipal, db: DB) -> Message:
     )
     pipe = CampaignPipeline(db, campaign, run)
     pipe.workspace = await db.get(Workspace, campaign.workspace_id)
-    pipe.check_control = _noop  # type: ignore[method-assign]
-    await pipe.stage_analysis()
-    await pipe.stage_scoring()
+    pipe.only_business = b.id
+    # The campaign's budget still applies; pause/runtime caps belong to the run, not to this one-off request.
+    pipe.check_control = pipe.check_budget  # type: ignore[method-assign]
+    try:
+        await pipe.check_budget()
+        lead.analyzed = False
+        lead.scored = False
+        await pipe.stage_analysis()
+        await pipe.stage_scoring()
+    except StopRun as stop:
+        await db.rollback()
+        if stop.code == "credits_exhausted":
+            raise credit_svc.InsufficientCredits("You have no credits left; top up to re-analyse leads") from stop
+        raise Conflict("The campaign's maximum budget is reached; raise it to re-analyse leads") from stop
     return Message(message="Lead re-analysed")
-
-
-async def _noop() -> None:
-    return None
 
 
 @contacts_router.patch("/{contact_id}", response_model=ContactOut, dependencies=[require_role(Role.ANALYST)])

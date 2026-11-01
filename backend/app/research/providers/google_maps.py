@@ -11,6 +11,7 @@ from urllib.parse import quote_plus
 
 from app.core.config import get_settings
 from app.models.enums import ProviderStatus
+from app.research import geo
 from app.research.enrichment.normalize import homepage_url
 from app.research.providers.base import (
     BusinessCandidate,
@@ -28,7 +29,17 @@ from app.research.scraping.selectors import MAPS
 log = logging.getLogger(__name__)
 
 MAPS_SEARCH = "https://www.google.com/maps/search/{q}?hl=en&gl={gl}"
+# Centred on the campaign city, so results are what someone standing there sees.
+MAPS_SEARCH_AT = "https://www.google.com/maps/search/{q}/@{lat:.5f},{lon:.5f},{zoom}z?hl=en&gl={gl}"
 END_OF_LIST = "reached the end of the list"
+
+
+def maps_search_url(q: str, country: str, place: geo.Place | None) -> str:
+    if place is None or not (place.lat or place.lon):
+        return MAPS_SEARCH.format(q=quote_plus(q), gl=country.lower())
+    return MAPS_SEARCH_AT.format(
+        q=quote_plus(q), lat=place.lat, lon=place.lon, zoom=place.maps_zoom, gl=country.lower()
+    )
 
 
 class GoogleMapsProvider:
@@ -43,7 +54,7 @@ class GoogleMapsProvider:
     )
 
     def __init__(self, session_factory: Callable[[str], PageSource] | None = None) -> None:
-        self._factory = session_factory or (lambda country: BrowserSession(country))
+        self._factory = session_factory
 
     def state(self, ctx: ProviderContext) -> ProviderState:
         if not get_settings().scraping_enabled:
@@ -54,10 +65,11 @@ class GoogleMapsProvider:
         if self.state(ctx).status != ProviderStatus.CONNECTED:
             raise ProviderError("Google Maps scraping is disabled")
         limit = min(query.limit, get_settings().scraper_max_places_per_campaign)
-        session = self._factory(query.country)
+        place = await geo.locate(query.country, query.city, query.region)
+        session = self._factory(query.country) if self._factory else BrowserSession(query.country, place=place)
         found: list[BusinessCandidate] = []
         try:
-            links = await self._collect_links(session, ctx, query, limit)
+            links = await self._collect_links(session, ctx, query, limit, place)
             for link in links[:limit]:
                 final_url, html = await session.open(link, wait_for=MAPS["name"][0])
                 await ctx.record_usage(self.info.key, "place", 1, 0.0, True, 200)
@@ -78,12 +90,12 @@ class GoogleMapsProvider:
         return found
 
     async def _collect_links(
-        self, session: PageSource, ctx: ProviderContext, query: SearchQuery, limit: int
+        self, session: PageSource, ctx: ProviderContext, query: SearchQuery, limit: int, place: geo.Place
     ) -> list[str]:
         links: list[str] = []
         seen: set[str] = set()
         for q in build_search_queries(query, max_queries=int(ctx.settings.get("max_queries", 3))):
-            url = MAPS_SEARCH.format(q=quote_plus(q), gl=query.country.lower())
+            url = maps_search_url(q, query.country, place)
             final_url, html = await session.open(url, wait_for=MAPS["feed"])
             await ctx.record_usage(self.info.key, "search", 1, 0.0, True, 200)
             if "/maps/place/" in final_url:  # a single exact match opens the place directly

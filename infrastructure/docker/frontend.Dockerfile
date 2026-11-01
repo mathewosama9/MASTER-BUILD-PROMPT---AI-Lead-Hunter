@@ -6,7 +6,9 @@ RUN npm ci --no-audit --no-fund
 FROM node:24-alpine AS build
 WORKDIR /app
 ARG API_INTERNAL_URL=http://api:8000
-ENV API_INTERNAL_URL=$API_INTERNAL_URL NEXT_TELEMETRY_DISABLED=1
+# Public site URL for canonical links, Open Graph, sitemap.xml and robots.txt (baked in at build time).
+ARG SITE_URL=http://localhost:3000
+ENV API_INTERNAL_URL=$API_INTERNAL_URL SITE_URL=$SITE_URL NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/ ./
 RUN npm run build

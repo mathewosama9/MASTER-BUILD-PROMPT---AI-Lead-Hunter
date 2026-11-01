@@ -38,12 +38,25 @@ from app.models import (
     LeadScore,
     ProviderUsage,
     Workspace,
+    WorkspaceProfile,
 )
 from app.models.enums import CampaignStatus, ContactType, Priority, ProviderStatus, Stage, VerificationStatus
+from app.research import geo
 from app.research.analysis.ai_service import AI_PROVIDERS, AIRefused, AIService, AIUnavailable
 from app.research.analysis.heuristic import heuristic_analysis
 from app.research.analysis.schemas import BusinessAnalysis
+from app.research.catalog import decision_roles
+from app.research.enrichment import people_finders
 from app.research.enrichment.contacts import ContactFinding, classify_email, social_profile_url
+from app.research.enrichment.decision_makers import (
+    DecisionMaker,
+    attach_known_emails,
+    extract_with_ai,
+    from_text,
+    merge,
+    search_linkedin,
+    search_person_profiles,
+)
 from app.research.enrichment.dedupe import dedupe_candidates, find_existing_business
 from app.research.enrichment.email_check import domain_accepts_mail
 from app.research.enrichment.normalize import (
@@ -77,16 +90,21 @@ from app.research.scoring.scorer import ContactSummary, ScoringInput, score_lead
 from app.research.scraping.browser import BrowserSession, BrowserUnavailable, PageSource
 from app.research.scraping.parsers import ScrapeBlocked
 from app.research.scraping.sessions import SessionExpired, daily_limit, load_sessions, mark_expired, take_quota
+from app.services import credits as credit_svc
 from app.services import providers as provider_svc
 from app.services.events import emit, publish
+from app.services.profile import seller_context
 from app.services.suppression import contact_is_suppressed, suppression_sets
 
 log = logging.getLogger(__name__)
+PERSON_NOTE = "Named individual: treat as personal data; confirm a lawful basis before contacting."
+# Contact rows that belong to a named decision maker (their own email/phone/WhatsApp/profile, not the business's).
+PERSON_CHANNEL = "decision_maker"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "target_count": 20,
     "max_companies": 40,
-    "max_pages_per_site": 5,
+    "max_pages_per_site": 8,
     "enrichment": True,
     "ai_analysis": True,
     "email_verification": False,
@@ -138,14 +156,26 @@ class CampaignPipeline:
         site_transport: httpx.AsyncBaseTransport | None = None,
         page_source: PageSource | None = None,
         search_transport: httpx.AsyncBaseTransport | None = None,
+        finder_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.db = db
+        self.finder_transport = finder_transport  # paid people finders (Hunter/Apollo/Lusha); tests mock it
         self.page_source = page_source
         self.search_transport = search_transport
         self._social_blocked = False
         self._search_blocked = False
         self._search_found = 0
+        self._people_found = 0  # businesses whose decision maker was identified
+        self._people_search_blocked = False
+        self._named_off_noted = False
+        self._ai_for_people: AIService | None | bool = False  # False = not built yet
         self._brave_key: str | None | bool = False  # False = not looked up yet
+        self._roles: tuple[str, ...] | None = None
+        self._finders: list[tuple[str, Any]] | None = None  # connected paid people finders, in order
+        self._finder_off: set[str] = set()  # finders that failed for an account reason during this run
+        self._person_search_blocked = False
+        self._direct_found = 0  # decision makers delivered with a direct email/phone
+        self._place: geo.Place | None = None  # where this campaign searches from (see geo.py)
         self.campaign = campaign
         self.run = run
         self.settings = campaign_settings(campaign)
@@ -153,6 +183,7 @@ class CampaignPipeline:
         self.site_transport = site_transport
         self.demo_profiles: dict[str, dict] = {}
         self.workspace: Workspace | None = None
+        self.only_business: uuid.UUID | None = None  # re-analysis of a single lead
         self.partial_reasons: list[str] = list((run.checkpoint or {}).get("partial_reasons", []))
         self._last_progress_push = 0.0
 
@@ -218,9 +249,55 @@ class CampaignPipeline:
         elapsed_min = (time.monotonic() - self.started) / 60 + float(self.checkpoint.get("elapsed_minutes", 0))
         if elapsed_min > float(self.settings["max_runtime_minutes"]):
             raise StopRun("Maximum runtime reached", CampaignStatus.PARTIALLY_COMPLETED, "max_runtime")
+        await self.check_budget()
+
+    async def check_budget(self) -> None:
         await self._refresh_costs()
         if self.campaign.cost_discovery + self.campaign.cost_ai >= float(self.settings["max_budget_usd"]):
             raise StopRun("Maximum budget reached", CampaignStatus.PARTIALLY_COMPLETED, "max_budget")
+
+    # ---------------------------------------------------------------- credits (see services/credits.py)
+
+    async def _credits_per_contact(self) -> int:
+        """0 when this run is not metered (demo campaign, exempt workspace or free contacts)."""
+        if not hasattr(self, "_per_contact"):
+            ws = self.workspace
+            if self.campaign.is_demo or ws is None or ws.billing_exempt:
+                self._per_contact = 0
+            else:
+                self._per_contact = max(0, (await credit_svc.platform_settings(self.db)).credits_per_contact)
+        return self._per_contact
+
+    async def _credit_room(self) -> int | None:
+        """How many more new contacts the balance can pay for (None = unmetered). Stops the run at zero."""
+        per = await self._credits_per_contact()
+        if not per:
+            return None
+        balance = await self.db.scalar(select(Workspace.credit_balance).where(Workspace.id == self.workspace.id))
+        room = int(balance or 0) // per
+        if room <= 0:
+            raise StopRun("Credits exhausted", CampaignStatus.PARTIALLY_COMPLETED, "credits_exhausted")
+        return room
+
+    async def _charge_lead(self, lead: CampaignLead, business: Business) -> None:
+        """Charge once for a business new to the workspace delivered with a usable contact.
+
+        If the balance ran out (e.g. another campaign spent it meanwhile) the lead is left unfinished, so a later
+        run delivers and charges it, and the run stops.
+        """
+        per = await self._credits_per_contact()
+        if not per or lead.pre_existing or lead.credits_charged:
+            return
+        if not await credit_svc.has_usable_contact(self.db, business.id):
+            return
+        try:
+            await credit_svc.charge(
+                self.db, self.workspace.id, per, campaign_id=self.campaign.id, business_id=business.id
+            )
+        except credit_svc.InsufficientCredits:
+            raise StopRun("Credits exhausted", CampaignStatus.PARTIALLY_COMPLETED, "credits_exhausted") from None
+        lead.credits_charged = per
+        await self.db.commit()  # release the workspace row lock straight away
 
     async def _refresh_costs(self) -> None:
         await self.db.flush()
@@ -843,13 +920,15 @@ class CampaignPipeline:
 
     async def _pending_leads(self, flag: str) -> list[tuple[CampaignLead, Business]]:
         col = getattr(CampaignLead, flag)
-        rows = await self.db.execute(
+        q = (
             select(CampaignLead, Business)
             .join(Business, Business.id == CampaignLead.business_id)
             .where(CampaignLead.campaign_id == self.campaign.id, col.is_(False))
             .order_by(CampaignLead.created_at)
         )
-        return list(rows.all())
+        if self.only_business is not None:
+            q = q.where(Business.id == self.only_business)
+        return list((await self.db.execute(q)).all())
 
     async def stage_enrichment(self) -> None:
         leads = await self._pending_leads("enriched")
@@ -873,6 +952,9 @@ class CampaignPipeline:
                     t="hunter_not_connected",
                 )
         sets = await suppression_sets(self.db, self.campaign.workspace_id)
+        if not self.campaign.is_demo:
+            await self._target_roles()  # before the concurrent website visits, which read it
+            self._place = await geo.locate(self.campaign.country, self.campaign.city, self.campaign.region)
         social = await self._social_source()
         try:
             await self._enrich_batches(leads, conc, transport, hunter_ctx, sets, social)
@@ -881,6 +963,15 @@ class CampaignPipeline:
                 await social.close()
         await self._complete_stage(Stage.COMPANY_ENRICHMENT)
         await self._complete_stage(Stage.CONTACT_ENRICHMENT)
+        if self._people_found:
+            await self.event(
+                Stage.CONTACT_ENRICHMENT,
+                "decision_makers_done",
+                f"Decision maker identified for {self._people_found} businesses "
+                f"({self._direct_found} with a direct email/phone)",
+                t="decision_makers_done",
+                p={"count": self._people_found, "direct": self._direct_found},
+            )
         if self._search_found:
             await self.event(
                 Stage.CONTACT_ENRICHMENT,
@@ -901,7 +992,7 @@ class CampaignPipeline:
         self._sessions = await load_sessions(self.db, self.campaign.workspace_id)
         if self.page_source is not None:
             return self.page_source
-        return BrowserSession(self.campaign.country, sessions=self._sessions)
+        return BrowserSession(self.campaign.country, sessions=self._sessions, place=self._place)
 
     async def _use_session(self, platform: str | None) -> bool:
         """Whether this profile visit should go through the user's linked account (within today's cap)."""
@@ -931,9 +1022,13 @@ class CampaignPipeline:
         sets: dict[str, set[str]],
         social: PageSource | None,
     ) -> None:
-        for i in range(0, len(leads), conc):
+        i = 0
+        while i < len(leads):
             await self.check_control()
-            batch = leads[i : i + conc]
+            room = await self._credit_room()  # never research more new leads than the balance can pay for
+            size = conc if room is None else min(conc, room)
+            batch = leads[i : i + size]
+            i += size
             await self.push_progress(
                 activity=f"Researching {batch[0][1].name}",
                 provider="website",
@@ -943,6 +1038,7 @@ class CampaignPipeline:
             for (lead, business), res in zip(batch, results, strict=True):
                 if isinstance(res, BaseException):
                     lead.processing_error = f"enrichment: {type(res).__name__}: {res}"[:500]
+                    await self._charge_lead(lead, business)  # listing contacts are still delivered
                     lead.enriched = True
                     await self.event(
                         Stage.COMPANY_ENRICHMENT,
@@ -969,15 +1065,325 @@ class CampaignPipeline:
                             await self._save_research(business, await self._research(business, transport), sets)
                         except Exception as exc:  # noqa: BLE001 - keep the lead; record why the site was not read
                             lead.processing_error = f"enrichment: {type(exc).__name__}: {exc}"[:500]
+                named = await self._decision_makers(business, res, sets)
                 if hunter_ctx is not None and business.normalized_domain:
-                    await self._hunter_enrich(business, hunter_ctx, sets)
+                    # Paid lookups only for leads the free sources could not name a decision maker for.
+                    await self._hunter_enrich(business, hunter_ctx, sets, search=not named)
                 elif self.campaign.is_demo and self.settings["email_verification"]:
                     await self._demo_verify(business)
                 if not self.campaign.is_demo and get_settings().email_mx_check:
                     await self._mx_check(business)
                 await self._refresh_contact_flags(business)
+                await self._charge_lead(lead, business)
                 lead.enriched = True
             await self.db.commit()
+
+    async def _people_ai(self) -> AIService | None:
+        if self._ai_for_people is False:
+            creds = {}
+            for key in AI_PROVIDERS:
+                state = await provider_svc.provider_state(self.db, self.campaign.workspace_id, key)
+                if state.status == ProviderStatus.CONNECTED:
+                    creds[key] = (await provider_svc.credentials_for(self.db, self.campaign.workspace_id, key))[0]
+            ai = AIService(creds)
+            self._ai_for_people = ai if ai.available else None
+        return self._ai_for_people or None
+
+    def _record_usage(self, provider_key: str, operation: str, cost: float, units: int = 1) -> None:
+        self.db.add(
+            ProviderUsage(
+                workspace_id=self.campaign.workspace_id,
+                campaign_id=self.campaign.id,
+                provider_key=provider_key,
+                operation=operation,
+                units=units,
+                cost_usd=cost * units,
+                success=True,
+                status_code=200,
+            )
+        )
+
+    async def _target_roles(self) -> tuple[str, ...]:
+        """Who to reach at each prospect: roles the campaign asked for, who buys what this workspace sells,
+        and who runs the prospect's kind of business (owners/founders/CEOs are always looked for too)."""
+        if self._roles is None:
+            spec = self.campaign.research_spec or {}
+            category = await self.db.scalar(
+                select(WorkspaceProfile.business_category).where(
+                    WorkspaceProfile.workspace_id == self.campaign.workspace_id
+                )
+            )
+            extra = [str(r) for r in spec.get("decision_roles") or [] if r]
+            self._roles = tuple(decision_roles(self.campaign.industry, category, extra))
+        return self._roles
+
+    async def _decision_makers(
+        self, business: Business, res: WebsiteResearch | None, sets: dict[str, set[str]]
+    ) -> bool:
+        """Name who decides at the business and find how to reach that person directly. Always on.
+
+        Order (cheapest and most certain first): the site's schema.org data, team/about pages and the contacts
+        printed next to each name; social bios; addresses already found that carry the person's name; LinkedIn
+        results via Brave when nobody is named; then the person's own public accounts via Brave; finally the
+        paid people finders (Hunter -> Apollo -> Lusha) only while the decision maker has no direct channel."""
+        if self.campaign.is_demo:
+            return False
+        roles = await self._target_roles()
+        people = list(res.people) if res is not None else []
+        pages = [(p.url, p.excerpt) for p in (res.pages if res is not None else []) if p.kind in ("about", "team")]
+        if pages and not any(p.source == "structured_data" for p in people):
+            ai = await self._people_ai()
+            if ai is not None:
+                try:
+                    found, cost = await extract_with_ai(ai, business.name, pages)
+                    people += found
+                    self._record_usage(ai.provider or "ai", "decision_makers", cost)
+                except Exception as exc:  # noqa: BLE001 - the regex/structured results still stand
+                    log.info("decision-maker AI extraction failed", extra={"error": str(exc)[:200]})
+        bios = await self.db.execute(
+            select(BusinessEvidence.url, BusinessEvidence.excerpt, BusinessEvidence.signal_key).where(
+                BusinessEvidence.business_id == business.id,
+                BusinessEvidence.kind == "social_profile",
+                BusinessEvidence.observed.is_(True),
+            )
+        )
+        for url, excerpt, signal_key in bios.all():
+            platform = (signal_key or "social:social").split(":", 1)[1]
+            people += from_text(excerpt or "", url or "", platform, confidence=0.45, extra_roles=roles)
+        if not people:
+            people = await self._linkedin_people(business, roles)
+        if not people and business.normalized_domain:
+            people = await self._apollo_people(business, roles)
+        merged = merge(people, roles)[:3]
+        if not merged:
+            return False
+        emails = (
+            await self.db.execute(
+                select(BusinessContact.normalized_value, BusinessContact.source_url).where(
+                    BusinessContact.business_id == business.id, BusinessContact.type == ContactType.EMAIL
+                )
+            )
+        ).all()
+        attach_known_emails(merged, [(e, u or "") for e, u in emails], business.normalized_domain)
+        top = merged[0]
+        await self._person_profiles(business, top)
+        if not top.has_direct_contact:
+            await self._paid_contact(business, top)
+        for dm in merged:
+            await self._save_person(business, dm, sets)
+        self._people_found += 1
+        if top.has_direct_contact:
+            self._direct_found += 1
+        return True
+
+    async def _linkedin_people(self, business: Business, roles: tuple[str, ...]) -> list[DecisionMaker]:
+        if self._people_search_blocked:
+            return []
+        key = await self._search_key()
+        limit = get_settings().person_search_daily_limit
+        if not key or not await take_quota(self.campaign.workspace_id, "people_search", limit):
+            return []
+        try:
+            people = await search_linkedin(
+                business.name, key, transport=self.search_transport, roles=roles, place=self._place
+            )
+            self._record_usage("brave", "people_search", get_settings().cost_brave_per_request)
+            return people
+        except SearchBlocked as exc:
+            self._people_search_blocked = True
+            log.info("people search stopped", extra={"error": str(exc)[:200]})
+        except httpx.HTTPError as exc:
+            log.info("people search failed", extra={"error": str(exc)[:200]})
+        return []
+
+    async def _person_profiles(self, business: Business, dm: DecisionMaker) -> None:
+        """The decision maker's own LinkedIn/Instagram/X/Facebook accounts, searched by name + business."""
+        s = get_settings()
+        if self._person_search_blocked:
+            return
+        platforms = [
+            p.strip() for p in s.person_search_platforms.split(",") if p.strip() and p.strip() not in dm.profiles
+        ]
+        key = await self._search_key() if platforms else None
+        if not key:
+            return
+        if not await take_quota(self.campaign.workspace_id, "person_search", s.person_search_daily_limit):
+            self._person_search_blocked = True
+            return
+        handles = [
+            v.rstrip("/").rsplit("/", 1)[-1].lstrip("@")
+            for v in await self.db.scalars(
+                select(BusinessContact.value).where(
+                    BusinessContact.business_id == business.id, BusinessContact.type == ContactType.SOCIAL
+                )
+            )
+        ]
+        try:
+            calls = await search_person_profiles(
+                dm,
+                business.name,
+                platforms,
+                key,
+                country=business.country,
+                domain=business.normalized_domain,
+                handles=handles,
+                transport=self.search_transport,
+                place=self._place,
+            )
+            if calls:
+                self._record_usage("brave", "person_search", s.cost_brave_per_request, units=calls)
+        except SearchBlocked as exc:
+            self._person_search_blocked = True
+            log.info("person search stopped", extra={"error": str(exc)[:200]})
+        except httpx.HTTPError as exc:
+            log.info("person search failed", extra={"error": str(exc)[:200]})
+
+    async def _people_finders(self) -> list[tuple[str, Any]]:
+        """Connected paid people finders in the configured order, each with its provider context."""
+        if self._finders is None:
+            self._finders = []
+            for key in people_finders.finder_order():
+                state = await provider_svc.provider_state(self.db, self.campaign.workspace_id, key)
+                if state.status == ProviderStatus.CONNECTED:
+                    ctx = await provider_svc.build_context(self.db, self.campaign.workspace_id, key, self.campaign.id)
+                    self._finders.append((key, ctx))
+        return [(k, c) for k, c in self._finders if k not in self._finder_off]
+
+    async def _paid_contact(self, business: Business, dm: DecisionMaker) -> None:
+        for key, ctx in await self._people_finders():
+            if key == "hunter" and not business.normalized_domain:
+                continue
+            try:
+                if await people_finders.find_contact(
+                    key,
+                    ctx,
+                    dm,
+                    domain=business.normalized_domain,
+                    company=business.name,
+                    country=business.country,
+                    transport=self.finder_transport,
+                ):
+                    return
+            except RateLimited:
+                self._finder_off.add(key)
+                await provider_svc.mark_rate_limited(self.campaign.workspace_id, key, 60)
+                await self._finder_event(key, "people_finder_rate_limited", f"{key} rate limited; skipped for this run")
+            except ProviderError as exc:
+                if exc.status_code in (401, 402, 403):
+                    self._finder_off.add(key)  # account problem: no point asking again this run
+                    await self._finder_event(key, "people_finder_error", f"{key}: {exc}")
+                log.info("people finder failed", extra={"provider": key, "error": str(exc)[:200]})
+            except httpx.HTTPError as exc:
+                log.info("people finder failed", extra={"provider": key, "error": str(exc)[:200]})
+
+    async def _apollo_people(self, business: Business, roles: tuple[str, ...]) -> list[DecisionMaker]:
+        finders = dict(await self._people_finders())
+        if "apollo" not in finders:
+            return []
+        titles = [r for r in roles if r.isascii()]
+        try:
+            return await people_finders.apollo_name_people(
+                finders["apollo"], business.normalized_domain, titles, business.country, self.finder_transport
+            )
+        except (ProviderError, httpx.HTTPError) as exc:
+            if isinstance(exc, ProviderError) and exc.status_code in (401, 402, 403, 429):
+                self._finder_off.add("apollo")
+            log.info("apollo people search failed", extra={"error": str(exc)[:200]})
+            return []
+
+    async def _finder_event(self, key: str, event_type: str, message: str) -> None:
+        if f"noted:{key}" in self._finder_off:
+            return
+        self._finder_off.add(f"noted:{key}")
+        await self.event(
+            Stage.CONTACT_ENRICHMENT,
+            event_type,
+            message,
+            level="warning",
+            provider_key=key,
+            t=event_type,
+            p={"provider": key},
+        )
+
+    async def _save_person(self, business: Business, dm: DecisionMaker, sets: dict[str, set[str]]) -> None:
+        """One PERSON row per decision maker plus one row per direct channel, each tagged with their name."""
+        sources = "+".join(dm.sources) if dm.sources else dm.source
+        await self._upsert_contact(
+            business,
+            ContactFinding(
+                ContactType.PERSON,
+                dm.email or dm.linkedin_url or dm.name,
+                f"person:{dm.key}",
+                dm.source_url,
+                subtype=PERSON_CHANNEL,
+                confidence=dm.confidence,
+                verification_status=VerificationStatus.DISCOVERED,
+                usage_restrictions=PERSON_NOTE,
+                person_name=dm.name,
+                person_role=dm.role,
+                source_provider=sources[:40],
+            ),
+            sets,
+        )
+        channels = [
+            (ContactType.EMAIL, "email", dm.email),
+            (ContactType.PHONE, "phone", dm.phone),
+            (ContactType.WHATSAPP, "whatsapp", dm.whatsapp),
+        ]
+        for ctype, kind, value in channels:
+            if not value:
+                continue
+            provider = dm.channel_sources.get(kind) or dm.source
+            await self._upsert_person_channel(
+                business,
+                ContactFinding(
+                    ctype,
+                    value,
+                    value.lower(),
+                    dm.channel_urls.get(kind) or dm.source_url,
+                    subtype=PERSON_CHANNEL,
+                    confidence=min(dm.confidence, 0.85),
+                    usage_restrictions=PERSON_NOTE,
+                    person_name=dm.name,
+                    person_role=dm.role,
+                    source_provider=provider[:40],
+                ),
+                sets,
+            )
+        for platform, url in dm.profiles.items():
+            await self._upsert_person_channel(
+                business,
+                ContactFinding(
+                    ContactType.SOCIAL,
+                    url,
+                    url.lower(),
+                    url,
+                    subtype=PERSON_CHANNEL,
+                    confidence=min(dm.confidence, 0.7),
+                    usage_restrictions=PERSON_NOTE,
+                    person_name=dm.name,
+                    person_role=f"{dm.role} · {platform}"[:200],
+                    source_provider=dm.channel_sources.get(f"profile:{platform}", dm.source)[:40],
+                ),
+                sets,
+            )
+
+    async def _upsert_person_channel(self, business: Business, f: ContactFinding, sets: dict[str, set[str]]) -> None:
+        """Like _upsert_contact, but an existing row with the same value (e.g. found on the site as a plain
+        business email) is re-labelled as this person's, since the person was named next to it."""
+        existing = await self.db.scalar(
+            select(BusinessContact).where(
+                BusinessContact.business_id == business.id,
+                BusinessContact.type == f.type,
+                BusinessContact.normalized_value == f.normalized_value,
+            )
+        )
+        if existing is not None and not existing.person_name:
+            existing.person_name = f.person_name
+            existing.person_role = f.person_role
+            existing.subtype = PERSON_CHANNEL
+            existing.usage_restrictions = existing.usage_restrictions or f.usage_restrictions
+        await self._upsert_contact(business, f, sets)
 
     async def _search_key(self) -> str | None:
         if self._brave_key is False:
@@ -1038,7 +1444,10 @@ class CampaignPipeline:
                 return
             try:
                 hits = await web_search(
-                    build_query(business.name, business.city, platform), brave_key=key, transport=self.search_transport
+                    build_query(business.name, business.city, platform),
+                    brave_key=key,
+                    transport=self.search_transport,
+                    place=self._place,
                 )
             except SearchBlocked as exc:
                 self._search_blocked = True
@@ -1213,6 +1622,7 @@ class CampaignPipeline:
             max_pages=int(self.settings["max_pages_per_site"]),
             transport=transport,
             skip_dns_check=transport is not None and self.campaign.is_demo,
+            roles=self._roles or (),  # resolved once in stage_enrichment (no DB calls inside gather)
         )
 
     async def _save_research(self, business: Business, res: WebsiteResearch, sets: dict[str, set[str]]) -> None:
@@ -1320,13 +1730,17 @@ class CampaignPipeline:
         )
         await self.db.flush()
 
-    async def _hunter_enrich(self, business: Business, ctx: Any, sets: dict[str, set[str]]) -> None:
-        allow_named = (
-            bool((self.workspace.settings or {}).get("allow_named_contacts", False)) if self.workspace else False
-        )
+    async def _hunter_enrich(
+        self, business: Business, ctx: Any, sets: dict[str, set[str]], *, search: bool = True
+    ) -> None:
+        allow_named = True  # decision makers are always delivered (see _decision_makers)
         try:
             async with HunterClient(ctx) as hunter:
-                data = await hunter.domain_search(business.normalized_domain, include_personal=allow_named)
+                data = (
+                    await hunter.domain_search(business.normalized_domain, include_personal=allow_named)
+                    if search
+                    else {}
+                )
                 for e in data.get("emails", []):
                     value = (e.get("value") or "").lower()
                     if not value:
@@ -1497,6 +1911,10 @@ class CampaignPipeline:
             "characteristics": self.campaign.characteristics,
             "services": self.campaign.services,
         }
+        profile = await self.db.scalar(
+            select(WorkspaceProfile).where(WorkspaceProfile.workspace_id == self.campaign.workspace_id)
+        )
+        seller = seller_context(profile, list(self.campaign.services or [])) if profile else {}
         for lead, business in leads:
             await self.check_control()
             evidence = await self._evidence_for(business)
@@ -1515,7 +1933,7 @@ class CampaignPipeline:
             analysis: BusinessAnalysis
             try:
                 if mode in AI_PROVIDERS:
-                    result = await ai.analyze_business(business=biz, evidence=evidence, target=target)
+                    result = await ai.analyze_business(business=biz, evidence=evidence, target=target, seller=seller)
                     analysis = result.output
                     usage = {
                         "provider": result.provider,
@@ -1525,10 +1943,10 @@ class CampaignPipeline:
                         "cost_usd": result.cost_usd,
                     }
                 else:
-                    analysis = heuristic_analysis(business=biz, evidence=evidence, target=target)
+                    analysis = heuristic_analysis(business=biz, evidence=evidence, target=target, seller=seller)
             except (AIUnavailable, AIRefused) as exc:
                 lead.processing_error = f"analysis: {exc}"[:500]
-                analysis = heuristic_analysis(business=biz, evidence=evidence, target=target)
+                analysis = heuristic_analysis(business=biz, evidence=evidence, target=target, seller=seller)
                 usage["provider"] = "heuristic"
                 await self.event(
                     Stage.AI_ANALYSIS,
@@ -1581,6 +1999,8 @@ class CampaignPipeline:
             business.last_analyzed_at = datetime.now(UTC)
             lead.analyzed = True
             await self.db.commit()
+        if self.only_business is not None:  # one lead: the campaign's own stage state is untouched
+            return
         await self._complete_stage(Stage.AI_ANALYSIS)
         await self.event(
             Stage.AI_ANALYSIS, "stage_done", f"Analysis completed ({mode})", t="analysis_done", p={"mode": mode}
@@ -1595,6 +2015,8 @@ class CampaignPipeline:
         min_score = float(self.settings["min_score"])
         for lead, business in leads:
             await self.check_control()
+            # Leads that skipped enrichment (enrichment off) still deliver their listing contacts.
+            await self._charge_lead(lead, business)
             assessment = await self.db.scalar(
                 select(LeadAssessment)
                 .where(LeadAssessment.business_id == business.id)
@@ -1677,6 +2099,8 @@ class CampaignPipeline:
                 activity=f"Scored {business.name}: {result.total}",
                 activity_t=("scored", {"name": business.name, "score": result.total}),
             )
+        if self.only_business is not None:
+            return
         await self._complete_stage(Stage.LEAD_SCORING)
         stats = await self.compute_stats()
         await self.event(
@@ -1710,6 +2134,7 @@ async def execute_campaign(
     site_transport: httpx.AsyncBaseTransport | None = None,
     page_source: PageSource | None = None,
     search_transport: httpx.AsyncBaseTransport | None = None,
+    finder_transport: httpx.AsyncBaseTransport | None = None,
 ) -> CampaignStatus | None:
     """Entry point used by the Celery worker (and tests). Idempotent: finished runs are not re-executed."""
     campaign = await db.get(Campaign, campaign_id)
@@ -1722,7 +2147,13 @@ async def execute_campaign(
         return CampaignStatus(campaign.status)
     await db.refresh(campaign, attribute_names=["sources"])
     pipeline = CampaignPipeline(
-        db, campaign, run, site_transport=site_transport, page_source=page_source, search_transport=search_transport
+        db,
+        campaign,
+        run,
+        site_transport=site_transport,
+        page_source=page_source,
+        search_transport=search_transport,
+        finder_transport=finder_transport,
     )
     status = await pipeline.execute()
     if status in (CampaignStatus.COMPLETED, CampaignStatus.PARTIALLY_COMPLETED, CampaignStatus.FAILED):

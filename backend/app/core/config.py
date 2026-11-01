@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    app_name: str = "AI Lead Hunter"
+    app_name: str = "Rasd"
     environment: Literal["development", "test", "production"] = "development"
     debug: bool = False
     log_level: str = "INFO"
@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     ai_max_tokens: int = 16000
     brave_api_key: str | None = None
     hunter_api_key: str | None = None
+    apollo_api_key: str | None = None
+    lusha_api_key: str | None = None
     firecrawl_api_key: str | None = None
     x_bearer_token: str | None = None
     facebook_access_token: str | None = None
@@ -77,6 +79,8 @@ class Settings(BaseSettings):
     osm_nominatim_url: str = "https://nominatim.openstreetmap.org"
     # Optional real contact address added to the User-Agent (placeholder addresses get blocked by Nominatim).
     osm_contact_email: str = ""
+    # Locate the campaign city (Nominatim, cached) so the browser and Brave search from inside it.
+    geo_city_lookup: bool = True
 
     # Direct browser scraping (Google Maps discovery, public social profile pages). Off unless enabled.
     # Limits: no account login, no captcha solving, no proxy rotation; a block stops the source cleanly.
@@ -93,6 +97,16 @@ class Settings(BaseSettings):
     social_search_enabled: bool = False
     social_search_platforms: str = "instagram,facebook,tiktok,snapchat"
     social_search_daily_limit: int = 200
+    # Decision makers (always on): the person's own accounts searched by name through Brave, then paid people
+    # finders in this order, only for decision makers the free sources found no direct email/phone for.
+    person_search_platforms: str = "linkedin,instagram,x,facebook"
+    person_search_daily_limit: int = 400
+    people_finder_order: str = "hunter,apollo,lusha"
+    # More discovery depth: Brave web queries per campaign, and the directory / social-profile discovery sources.
+    brave_max_queries: int = 16
+    directory_pages_per_campaign: int = 60
+    directory_sites: str = ""  # extra directories: "EG:education:example.com;SA:*:other.sa"
+    social_discovery_max_queries: int = 12
     # Login browser (dashboard "Connect" for linked accounts): internal control URL and the noVNC URL the
     # user's browser loads. Keep the noVNC port bound to localhost or behind authenticated HTTPS.
     login_browser_url: str = "http://login-browser:7900"
@@ -104,13 +118,32 @@ class Settings(BaseSettings):
     # Cost estimates (USD) used for budget tracking when providers do not return cost.
     cost_brave_per_request: float = 0.005
     cost_hunter_per_request: float = 0.01
+    cost_apollo_per_request: float = 0.05
+    cost_lusha_per_request: float = 0.15
     cost_ai_input_per_mtok: float = 4.0
     cost_ai_output_per_mtok: float = 20.0
     # DeepSeek pricing estimate (USD per million tokens); check the DeepSeek pricing page and adjust.
     cost_deepseek_input_per_mtok: float = 0.30
     cost_deepseek_output_per_mtok: float = 1.20
 
+    # Outgoing email (password reset, email confirmation). Unset host: emails are not sent; outside production
+    # their text, links included, goes to the API log so local sign-ups can still be confirmed.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str = ""
+    smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
+    password_reset_minutes: int = 60
+    email_verify_hours: int = 72
+    password_reset_limit_per_hour: int = 5
+    verify_resend_limit_per_hour: int = 3
+
     rate_limit_default: str = "120/minute"
+    # Self-signup: new accounts per client IP per hour (each gets free trial credits).
+    signup_limit_per_hour: int = 5
+    contact_limit_per_hour: int = 5
+    preview_limit_per_hour: int = 120
     data_retention_days: int = 365
 
     @field_validator("cors_origins", mode="before")

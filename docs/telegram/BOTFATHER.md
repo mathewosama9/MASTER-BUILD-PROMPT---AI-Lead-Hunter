@@ -1,38 +1,22 @@
 # Telegram bot setup: copy-paste texts
 
 ## Name (shown in chats)
-Codex Lead Hunter
+رصد · Rasd
 
-## Username (must end with "bot"; try in order until one is free)
-1. CodexLeadHunterBot
-2. CodexLeadsBot
-3. Codex_LeadHunter_bot
+## Username
+Set `TELEGRAM_BOT_USERNAME` in `.env` to the bot's username (without `@`). The dashboard uses it for the one-tap
+link button (`https://t.me/<username>?start=<code>`).
 
 ## Profile photo
-`docs/telegram/bot-avatar.png` (640×640, brand navy/blue with a yellow "lead found" target)
+Use the Rasd radar mark from the brand assets (640×640).
 
-## About (≤120 chars, shown on the bot's profile)
-EN: Find, analyse and score B2B leads in the Gulf & Egypt. Run campaigns and get results here.
-AR: ابحث عن العملاء المحتملين وحلّلهم وقيّمهم في الخليج ومصر. شغّل الحملات واستلم النتائج هنا.
+## About, description and commands
+The bot sets these itself on startup, in English and Arabic (`telegram/main.py`: `COMMANDS`, `DESCRIPTION`,
+`SHORT_DESCRIPTION`); Telegram shows the Arabic texts to users whose app language is Arabic. Nothing to do in
+BotFather. Commands: /start /new /campaigns /top /balance /lang /help.
 
-## Description (≤512 chars, shown before the user presses Start)
-EN:
-Codex Lead Hunter finds businesses that match your target market, researches their websites and social profiles, and scores each lead with evidence.
-
-• Start a research campaign in a few taps
-• Follow progress live
-• Get the top leads, contacts and CSV export
-
-Private team bot: link your account from the dashboard (Settings → Telegram) and send /link CODE.
-
-AR:
-Codex Lead Hunter يبحث عن الشركات المناسبة لسوقك المستهدف، ويفحص مواقعها وحساباتها، ويقيّم كل عميل محتمل بالأدلة.
-
-• ابدأ حملة بحث بخطوات بسيطة
-• تابع التقدم لحظة بلحظة
-• استلم أفضل العملاء وبيانات التواصل وملف CSV
-
-بوت خاص بالفريق: اربط حسابك من لوحة التحكم (الإعدادات ← تيليجرام) ثم أرسل ‎/link CODE
-
-## Commands
-Set automatically by the bot on startup (/start /new /campaigns /top /link /lang /help); nothing to do in BotFather.
+## Linking flow
+1. The user opens the dashboard → Settings → Telegram and presses “Generate linking code”.
+2. “Open the bot and link” opens `t.me/<bot>?start=<code>`; the bot links the account at once. Sending
+   `/link CODE` still works.
+3. Links made by non-admin members wait for an admin's approval.

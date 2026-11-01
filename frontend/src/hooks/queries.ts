@@ -4,7 +4,19 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
-import type { Campaign, DashboardStats, JobEvent, LeadDetail, LeadRow, Me, Meta, Page, Provider } from "@/types/api";
+import type {
+  BillingSummary,
+  Campaign,
+  DashboardStats,
+  JobEvent,
+  LeadDetail,
+  LeadRow,
+  Me,
+  Meta,
+  Page,
+  Profile,
+  Provider,
+} from "@/types/api";
 
 export const ACTIVE = ["queued", "discovering", "enriching", "analyzing"];
 
@@ -12,8 +24,34 @@ export function useMe() {
   return useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/auth/me"), staleTime: 60_000, retry: false });
 }
 
+/** Balance and trial state; shared by the top bar badge and the billing page. */
+export function useBillingSummary() {
+  return useQuery({ queryKey: ["billing-summary"], queryFn: () => api<BillingSummary>("/billing/summary"), staleTime: 30_000 });
+}
+
 export function useMeta() {
   return useQuery({ queryKey: ["meta"], queryFn: () => api<Meta>("/meta"), staleTime: Infinity });
+}
+
+export function useProfile() {
+  return useQuery({ queryKey: ["profile"], queryFn: () => api<Profile>("/profile"), staleTime: 60_000 });
+}
+
+/**
+ * Display name of a recommended service: the workspace's own offering, else the name stored with the
+ * recommendation (offering since deleted), else the legacy catalog label, else the raw key.
+ */
+export function useServiceName() {
+  const meta = useMeta();
+  const profile = useProfile();
+  return (key: string | null | undefined, locale: string, stored?: string | null) => {
+    if (!key) return "";
+    const own = profile.data?.offerings.find((o) => o.id === key);
+    if (own) return own.name;
+    if (stored) return stored;
+    const legacy = meta.data?.services.find((s) => s.key === key);
+    return legacy ? (locale === "ar" ? legacy.ar : legacy.en) : key;
+  };
 }
 
 export function useProviders() {
@@ -172,4 +210,9 @@ export function useCampaignLive(id: string) {
   }, [active, id, qc, transport]);
 
   return { campaign, events, live, transport };
+}
+
+/** Platform admins (superusers) see provider names and costs; customers see neither. */
+export function usePlatformAdmin() {
+  return !!useMe().data?.user.is_superuser;
 }

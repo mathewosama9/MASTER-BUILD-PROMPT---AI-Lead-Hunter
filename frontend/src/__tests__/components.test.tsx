@@ -99,16 +99,17 @@ describe("event messages", () => {
       <button onClick={() => setLocale("ar")}>{eventText(data, message)}</button>
     );
   }
-  it("renders templated events in Arabic and keeps the raw message for untagged ones", async () => {
+  it("renders templated events in Arabic with generic source names and keeps the raw message for untagged ones", async () => {
     wrap(
       <>
         <Event data={{ t: "provider_done", p: { provider: "google_maps", count: 40 } }} message="Google Maps returned 40" />
         <Event data={{}} message="Legacy English line" />
       </>,
     );
-    expect(screen.getByText("Google Maps returned 40 businesses")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Google Maps returned 40 businesses"));
-    expect(screen.getByText("خرائط جوجل رجّع 40 شركة")).toBeInTheDocument();
+    // Customers see the kind of source, never the provider's name.
+    expect(screen.getByText("Business listings returned 40 businesses")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Business listings returned 40 businesses"));
+    expect(screen.getByText("أدلة الأعمال: تم العثور على 40 شركة")).toBeInTheDocument();
     expect(screen.getByText("Legacy English line")).toBeInTheDocument();
   });
 });

@@ -125,7 +125,7 @@ def demo_profiles(query: SearchQuery, seed: str) -> list[dict]:
                 "bilingual": rng.random() < 0.6,
                 "phone_suffix": f"{100 + i:03d}"[-3:],
                 "description": f"{name_en.replace(' (Demo)', '')} is a fictional {suffix_en.lower()} in "
-                f"{city_en or query.country} used for AI Lead Hunter demo mode.",
+                f"{city_en or query.country} used for Rasd demo mode.",
             }
         )
     # A duplicate listing (same domain, different source URL) to exercise deduplication.

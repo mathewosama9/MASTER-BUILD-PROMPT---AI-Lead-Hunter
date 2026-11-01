@@ -42,10 +42,13 @@ async def create_link_code(p: CurrentPrincipal, db: DB) -> dict:
     )
     await audit(db, p, "telegram.link_code_created")
     await db.commit()
+    username = (get_settings().telegram_bot_username or "").lstrip("@")
     return {
         "code": code,
         "expires_at": expires.isoformat(),
-        "bot_username": get_settings().telegram_bot_username,
+        "bot_username": username or None,
+        # One tap links the account: Telegram opens the bot and sends "/start CODE" (codes use only A-Z, 2-9).
+        "deep_link": f"https://t.me/{username}?start={code}" if username else None,
         "instructions": f"Send /link {code} to the bot within {CODE_TTL_MINUTES} minutes.",
     }
 
@@ -100,7 +103,7 @@ async def whoami(p: CurrentPrincipal) -> dict:
         "workspace_id": str(p.workspace_id),
         "locale": p.telegram_account.locale if p.telegram_account else p.user.locale,
         "demo_mode": get_settings().demo_mode,
-        "dashboard_url": get_settings().frontend_url,
+        "dashboard_url": get_settings().frontend_url.rstrip("/") + "/app",
     }
 
 

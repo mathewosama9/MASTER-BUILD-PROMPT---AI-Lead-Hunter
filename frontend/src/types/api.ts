@@ -1,7 +1,15 @@
 export type Role = "owner" | "admin" | "analyst" | "viewer";
 
 export interface Me {
-  user: { id: string; email: string; full_name: string; is_active: boolean; locale: string };
+  user: {
+    id: string;
+    email: string;
+    full_name: string;
+    is_active: boolean;
+    is_superuser?: boolean;
+    email_verified_at?: string | null;
+    locale: string;
+  };
   workspace_id: string;
   workspace_name: string;
   role: Role;
@@ -146,7 +154,7 @@ export interface Assessment {
   hypotheses: { statement: string; basis_evidence_ids: string[]; confidence: string }[];
   potential_problems: string[];
   evidence_links: { id: string; url: string | null; title: string | null }[];
-  recommended_services: { service: string; rationale: string; evidence_ids: string[] }[];
+  recommended_services: { service: string; name?: string; rationale: string; evidence_ids: string[] }[];
   opportunity: string;
   suggested_pitch: string;
   unknowns: string[];
@@ -232,10 +240,47 @@ export interface Provider {
   usage_month: { requests: number; cost_usd: number };
 }
 
+export interface Offering {
+  id: string;
+  name: string;
+  description: string;
+  keywords: string[];
+}
+
+/** What the workspace sells and who it sells to (`/profile`). */
+export interface Profile {
+  company_name: string;
+  website: string | null;
+  business_category: string | null;
+  description: string;
+  value_proposition: string;
+  offerings: Offering[];
+  target_industries: string[];
+  target_countries: string[];
+  target_cities: string[];
+  company_sizes: string[];
+  good_signals: string[];
+  disqualifiers: string[];
+  channels: string[];
+  sender_name: string;
+  outreach_language: "ar" | "en";
+  tone: string;
+  onboarding: { step: number; completed: boolean; steps: number };
+}
+
 export interface Meta {
   demo_mode: boolean;
   countries: { code: string; name_en: string; name_ar: string; cities: { en: string; ar: string }[] }[];
-  industries: { key: string; en: string; ar: string }[];
+  industries: { key: string; en: string; ar: string; group?: string }[];
+  industry_groups?: { key: string; en: string; ar: string }[];
+  provider_categories?: {
+    key: string;
+    en: string;
+    ar: string;
+    offerings: { en: string; ar: string }[];
+    targets: string[];
+  }[];
+  /** Labels of the fixed service list the product shipped with; old leads may still carry these keys. */
   services: { key: string; en: string; ar: string }[];
   scoring: { weights: Record<string, number>; thresholds: Record<string, number>; version: string };
 }
@@ -250,13 +295,33 @@ export interface DashboardStats {
     active_campaigns: number;
     completed_campaigns: number;
     failed_campaigns: number;
-    ai_cost_usd: number;
-    discovery_cost_usd: number;
+    /** Platform admins only. */
+    ai_cost_usd?: number;
+    discovery_cost_usd?: number;
     today: number;
     week: number;
     month: number;
     conversion_rate: number | null;
+    reached: number;
   };
+  /** Last 30 days against the 30 before. */
+  period: Record<"new" | "with_contact" | "qualified" | "credits_used", { current: number; previous: number }>;
+  pipeline: Record<string, number>;
+  next_actions: {
+    id: string;
+    name: string;
+    city: string | null;
+    country: string | null;
+    industry: string | null;
+    score: number | null;
+    priority: string | null;
+    crm_status: string;
+    whatsapp: string | null;
+    phone: string | null;
+    /** The latest ready first message for this lead, pre-filled in the WhatsApp link. */
+    whatsapp_message: string | null;
+  }[];
+  checklist: Record<"email_verified" | "profile" | "telegram" | "campaign" | "contacted", boolean>;
   trend: { date: string; count: number }[];
   by_country: { key: string; count: number }[];
   by_industry: { key: string; count: number }[];
@@ -273,4 +338,72 @@ export interface DashboardStats {
     level: string;
     created_at: string;
   }[];
+}
+
+export interface BillingSummary {
+  billing_exempt: boolean;
+  balance: number;
+  on_trial: boolean;
+  trial_ends_at: string | null;
+  trial_days_left: number | null;
+  trial_expired: boolean;
+  awaiting_verification?: boolean;
+  credits_per_contact: number;
+  low_balance: boolean;
+  pending_topups: number;
+  payment_instructions_ar: string;
+  payment_instructions_en: string;
+}
+
+export type CreditKind = "trial_grant" | "purchase" | "manual_adjust" | "campaign_charge" | "refund";
+export type PaymentMethod = "instapay" | "bank_transfer" | "vodafone_cash";
+export type TopUpStatus = "pending" | "approved" | "rejected";
+
+export interface CreditTransaction {
+  id: string;
+  delta: number;
+  balance_after: number;
+  kind: CreditKind;
+  campaign_id: string | null;
+  business_id: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface CreditPackage {
+  id: string;
+  name_ar: string;
+  name_en: string;
+  credits: number;
+  price: string;
+  currency: string;
+  featured?: boolean;
+}
+
+export interface TopUp {
+  id: string;
+  package_id: string | null;
+  credits: number;
+  amount: string;
+  currency: string;
+  method: PaymentMethod;
+  reference: string | null;
+  receipt_filename: string | null;
+  status: TopUpStatus;
+  reason: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export interface PublicTestimonial {
+  id: string;
+  author_name: string;
+  author_role: string | null;
+  company: string | null;
+  city: string | null;
+  country: string | null;
+  rating: number;
+  body_ar: string;
+  body_en: string;
+  is_featured: boolean;
 }

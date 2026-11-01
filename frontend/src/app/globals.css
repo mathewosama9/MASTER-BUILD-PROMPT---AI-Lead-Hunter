@@ -4,35 +4,50 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * codex brand identity (from the brand guideline):
- *   Navy #0E0F31 · Indigo #4B4D83 · Lavender #C5C6E3 · Ghost #F2F3FF
- *   Blue 700 #0049B2 · Blue 500 #1D79FF · Blue 400 #4E94FF · Blue 200 #99C2FF · Blue 100 #CCE0FF
- *   Yellow 500 #FFC100 · Yellow 400 #FFCF48 · Yellow 200 #FFE197 · Yellow 100 #FFF1D2
- * Fonts: Neue Montreal (EN), Rubik + Noto Sans Arabic (AR).
+ * Rasd (رصد) brand identity: a radar that spots your next clients.
+ *   Ink    #071A17 (deep green-black: dark surfaces, text)
+ *   Rasd   #0B8A63 (primary green)        Signal #C8F169 (lime "ping": CTAs, highlights)
+ *   Paper  #F7F7F2 (warm light surface)   Sand   #EDE9DF (secondary surface)
+ * Fonts: Readex Pro (headings, AR + EN), IBM Plex Sans Arabic (body, AR + EN).
  */
-/* Neue Montreal is a licensed font: drop the .woff2 files in public/fonts and uncomment
-   the @font-face block in public/fonts/README.md instructions. Until then Inter is used. */
 
 @theme {
-  --color-navy-950: #08091f;
-  --color-navy-900: #0e0f31;
-  --color-navy-800: #17184a;
-  --color-navy-700: #25275f;
-  --color-indigo-500: #4b4d83;
-  --color-lavender-300: #c5c6e3;
-  --color-ghost-50: #f2f3ff;
-  --color-brand-700: #0049b2;
-  --color-brand-500: #1d79ff;
-  --color-brand-400: #4e94ff;
-  --color-brand-200: #99c2ff;
-  --color-brand-100: #cce0ff;
-  --color-sun-500: #ffc100;
-  --color-sun-400: #ffcf48;
-  --color-sun-200: #ffe197;
-  --color-sun-100: #fff1d2;
+  --color-ink-950: #04110e;
+  --color-ink-900: #071a17;
+  --color-ink-800: #0d2722;
+  --color-ink-700: #16362f;
+  --color-ink-600: #24483f;
+  --color-mist-500: #6f8a82;
+  --color-mist-300: #a9c2b9;
+  --color-mist-100: #dbe7e2;
+  --color-rasd-800: #05553d;
+  --color-rasd-700: #076b4d;
+  --color-rasd-600: #0b8a63;
+  --color-rasd-500: #10a877;
+  --color-rasd-400: #3cc594;
+  --color-rasd-300: #7fdcb6;
+  --color-rasd-200: #b2ebd3;
+  --color-rasd-100: #d3f2e5;
+  --color-rasd-50: #ecf8f3;
+  --color-signal-500: #b3e04a;
+  --color-signal-400: #c8f169;
+  --color-signal-300: #ddf79f;
+  --color-signal-100: #f3fcdc;
+  --color-paper: #f7f7f2;
+  --color-sand-200: #ede9df;
+  --color-sand-100: #f3f1ea;
+  /* Amber, kept for warnings and highlights (low balance, demo mode, hypotheses). */
+  --color-sun-500: #f5a524;
+  --color-sun-400: #ffbf4d;
+  --color-sun-200: #ffe0a3;
+  --color-sun-100: #fff3d9;
 
-  --font-display: "Neue Montreal", var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-arabic: var(--font-rubik), var(--font-noto-arabic), ui-sans-serif, sans-serif;
+  --font-display: var(--font-readex), var(--font-plex-arabic), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-plex-arabic), var(--font-readex), ui-sans-serif, system-ui, sans-serif;
+
+  --animate-ping-slow: ping-slow 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+  --animate-sweep: sweep 6s linear infinite;
+  --animate-marquee: marquee 40s linear infinite;
 }
 
 @theme inline {
@@ -57,69 +72,72 @@
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-muted: var(--sidebar-muted);
-  --font-sans: var(--app-font);
-  --radius-lg: 0.875rem;
+  --font-sans: var(--font-body);
+  --radius-xl: 1.25rem;
+  --radius-lg: 1rem;
   --radius-md: 0.625rem;
   --radius-sm: 0.375rem;
 }
 
 :root {
-  --background: #f2f3ff; /* Ghost */
-  --foreground: #0e0f31; /* Navy */
+  --background: #f7f7f2; /* Paper */
+  --foreground: #071a17; /* Ink */
   --card: #ffffff;
-  --card-foreground: #0e0f31;
-  --muted: #e8e9f7;
-  --muted-foreground: #4b4d83; /* Indigo */
-  --border: #d9dbef;
-  --input: #c5c6e3; /* Lavender */
-  --ring: #1d79ff;
-  --primary: #0049b2; /* Blue 700 for AA contrast on light */
+  --card-foreground: #071a17;
+  --muted: #efefe8;
+  --muted-foreground: #4b5f58;
+  --border: #e2e3da;
+  --input: #d2d6cc;
+  --ring: #10a877;
+  --primary: #076b4d; /* Rasd 700 for AA contrast on light */
   --primary-foreground: #ffffff;
-  --secondary: #cce0ff;
-  --secondary-foreground: #0049b2;
-  --accent: #ffc100; /* Yellow */
-  --accent-foreground: #0e0f31;
+  --secondary: #d3f2e5;
+  --secondary-foreground: #05553d;
+  --accent: #c8f169; /* Signal */
+  --accent-foreground: #071a17;
   --destructive: #d92d4a;
-  --success: #12996b;
-  --warning: #b37a00;
-  --sidebar: #0e0f31;
-  --sidebar-foreground: #f2f3ff;
-  --sidebar-muted: #c5c6e3;
-  --app-font: var(--font-display);
+  --success: #0b8a63;
+  --warning: #a86a00;
+  --sidebar: #071a17;
+  --sidebar-foreground: #eef5f1;
+  --sidebar-muted: #a9c2b9;
 }
 
 .dark {
-  --background: #08091f;
-  --foreground: #f2f3ff;
-  --card: #0e0f31;
-  --card-foreground: #f2f3ff;
-  --muted: #17184a;
-  --muted-foreground: #c5c6e3;
-  --border: #25275f;
-  --input: #2e3070;
-  --ring: #4e94ff;
-  --primary: #4e94ff; /* Blue 400 on navy */
-  --primary-foreground: #08091f;
-  --secondary: #17184a;
-  --secondary-foreground: #99c2ff;
-  --accent: #ffc100;
-  --accent-foreground: #0e0f31;
+  --background: #04110e;
+  --foreground: #eef5f1;
+  --card: #0a1f1a;
+  --card-foreground: #eef5f1;
+  --muted: #0f2a24;
+  --muted-foreground: #a9c2b9;
+  --border: #1a3a32;
+  --input: #24483f;
+  --ring: #3cc594;
+  --primary: #3cc594; /* Rasd 400 on ink */
+  --primary-foreground: #04110e;
+  --secondary: #0f2a24;
+  --secondary-foreground: #7fdcb6;
+  --accent: #c8f169;
+  --accent-foreground: #071a17;
   --destructive: #ff5c77;
-  --success: #3ddc97;
-  --warning: #ffcf48;
-  --sidebar: #08091f;
-  --sidebar-foreground: #f2f3ff;
-  --sidebar-muted: #9a9cc9;
-}
-
-html[dir="rtl"] {
-  --app-font: var(--font-arabic);
+  --success: #3cc594;
+  --warning: #ffbf4d;
+  --sidebar: #04110e;
+  --sidebar-foreground: #eef5f1;
+  --sidebar-muted: #a9c2b9;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--app-font);
+  font-family: var(--font-body);
+}
+
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-display);
 }
 
 * {
@@ -127,8 +145,8 @@ body {
 }
 
 ::selection {
-  background: #ffc100;
-  color: #0e0f31;
+  background: #c8f169;
+  color: #071a17;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -136,6 +154,7 @@ body {
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }
@@ -146,4 +165,43 @@ body {
 }
 .animate-indeterminate {
   animation: indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes ping-slow {
+  0% { transform: scale(1); opacity: 0.7; }
+  80%, 100% { transform: scale(2.6); opacity: 0; }
+}
+
+@keyframes sweep {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes marquee {
+  to { transform: translateX(-50%); }
+}
+html[dir="rtl"] .animate-marquee {
+  animation-direction: reverse;
+}
+
+/* Scroll reveal (see features/site/motion.tsx). Content stays visible when JS or motion is off. */
+.reveal {
+  transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.reveal[data-shown="false"] {
+  opacity: 0;
+  transform: translateY(18px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal[data-shown="false"] {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Faint grid used behind hero sections. */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, currentColor 7%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, currentColor 7%, transparent) 1px, transparent 1px);
+  background-size: 44px 44px;
 }

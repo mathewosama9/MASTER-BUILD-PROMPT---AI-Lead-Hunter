@@ -19,6 +19,15 @@ const nextConfig: NextConfig = {
       },
     },
   },
+  // The dashboard moved under /app when the public site took over "/"; keep old links (bookmarks, Telegram) working.
+  async redirects() {
+    // The agency "services" page was replaced by "who it's for" in the Rasd rebrand.
+    const renamed = [{ source: "/services", destination: "/use-cases", permanent: true }];
+    return renamed.concat(["campaigns", "leads", "settings", "suppression", "billing"].flatMap((section) => [
+      { source: `/${section}`, destination: `/app/${section}`, permanent: false },
+      { source: `/${section}/:path*`, destination: `/app/${section}/:path*`, permanent: false },
+    ]));
+  },
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${API_INTERNAL_URL}/api/:path*` }];
   },

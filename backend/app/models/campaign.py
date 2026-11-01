@@ -106,3 +106,5 @@ class CampaignLead(UUIDPk, Timestamps, Base):
     priority: Mapped[str | None] = mapped_column(String(16))
     qualified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     processing_error: Mapped[str | None] = mapped_column(Text)
+    # Credits charged for delivering this lead (0 = not charged); makes charging idempotent across runs.
+    credits_charged: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

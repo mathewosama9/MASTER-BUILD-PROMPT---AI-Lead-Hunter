@@ -1,4 +1,4 @@
-# AI Lead Hunter — local/full stack.  Usage:  cp .env.example .env && docker compose up --build
+# Rasd — local/full stack.  Usage:  cp .env.example .env && docker compose up --build
 name: ai-lead-hunter
 
 x-backend-env: &backend-env
@@ -97,9 +97,10 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/frontend.Dockerfile
-      args: { API_INTERNAL_URL: http://api:8000 }
+      args: { API_INTERNAL_URL: http://api:8000, SITE_URL: "${FRONTEND_URL:-http://localhost:3000}" }
     environment:
       API_INTERNAL_URL: http://api:8000
+      SITE_URL: ${FRONTEND_URL:-http://localhost:3000}
     ports: ["${WEB_PORT:-3000}:3000"]
     depends_on: [api]
     restart: unless-stopped

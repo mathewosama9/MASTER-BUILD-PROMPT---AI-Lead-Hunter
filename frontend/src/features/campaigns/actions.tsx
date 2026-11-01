@@ -26,8 +26,8 @@ export function CampaignActions({ c, compact = false }: { c: Campaign; compact?:
       qc.invalidateQueries({ queryKey: ["campaigns"] });
       qc.invalidateQueries({ queryKey: ["campaign", c.id] });
       qc.invalidateQueries({ queryKey: ["campaign-events", c.id] });
-      if (action === "duplicate" && res && typeof res === "object" && "id" in res) router.push(`/campaigns/${(res as Campaign).id}`);
-      if (action === "delete") router.push("/campaigns");
+      if (action === "duplicate" && res && typeof res === "object" && "id" in res) router.push(`/app/campaigns/${(res as Campaign).id}`);
+      if (action === "delete") router.push("/app/campaigns");
       toast.success(`${buttons.find((b) => b.key === action)?.label ?? (action === "delete" ? t.campaigns.delete : t.common.done)} ✓`);
     },
     onError: (e: Error) => toast.error(e.message),

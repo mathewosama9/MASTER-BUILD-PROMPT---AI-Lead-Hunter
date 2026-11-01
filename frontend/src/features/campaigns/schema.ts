@@ -84,7 +84,7 @@ export const STEP_FIELDS: (keyof CampaignFormInput)[][] = [
 
 export const defaultCampaignValues: CampaignFormInput = {
   name: "",
-  country: "SA",
+  country: "EG",
   city: "",
   region: "",
   language: "en",

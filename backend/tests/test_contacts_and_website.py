@@ -68,6 +68,51 @@ def test_ssrf_rejects_internal_urls(url):
         validate_url_shape(url)
 
 
+class _RecordingBackend:
+    def __init__(self) -> None:
+        self.dialled: list[str] = []
+
+    async def connect_tcp(self, host, port, **kwargs):
+        import httpcore
+
+        self.dialled.append(host)
+        raise httpcore.ConnectError("test: not dialling out")
+
+    async def sleep(self, seconds):
+        return None
+
+
+async def test_dns_rebinding_cannot_reach_internal_address(monkeypatch):
+    """The name passes the pre-flight check, then re-resolves to loopback at connect time: refused."""
+    from app.core import safe_http
+
+    answers = iter([["93.184.216.34"], ["127.0.0.1"]])
+
+    async def flipping_resolve(host):
+        return next(answers)
+
+    monkeypatch.setattr(safe_http, "_resolve", flipping_resolve)
+    async with SafeFetcher(respect_robots=False) as f:
+        with pytest.raises(UnsafeURLError):
+            await f.get("http://rebind.example/")
+
+
+async def test_connection_is_pinned_to_the_validated_address(monkeypatch):
+    from app.core import safe_http
+
+    async def resolve(host):
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(safe_http, "_resolve", resolve)
+    inner = _RecordingBackend()
+    transport = safe_http.pinned_transport()
+    transport._pool._network_backend = safe_http.PinnedPublicBackend(inner)
+    async with SafeFetcher(respect_robots=False, transport=transport) as f:
+        with pytest.raises(httpx.ConnectError):
+            await f.get("https://site.example/")
+    assert inner.dialled == ["93.184.216.34"]  # the IP, never the hostname
+
+
 async def test_redirect_to_private_address_is_blocked():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/robots.txt":

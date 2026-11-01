@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.core.db import get_sessionmaker
 from app.core.errors import AppError, Conflict
 from app.core.redis import async_redis
-from app.models import Campaign, CampaignRun, CampaignSource, JobEvent
+from app.models import Campaign, CampaignRun, CampaignSource, JobEvent, Workspace
 from app.models.enums import CampaignStatus, Role
 from app.research.analysis.ai_service import AI_PROVIDERS, AIRefused, AIService, AIUnavailable
 from app.research.analysis.heuristic import rule_based_spec
@@ -31,9 +31,11 @@ from app.schemas.campaign import (
 )
 from app.schemas.common import Message, Page
 from app.services import campaigns as svc
+from app.services import credits as credit_svc
 from app.services import providers as provider_svc
 from app.services.events import channel
 from app.services.imports import ImportError_, encode_rows, parse_import
+from app.services.profile import get_profile
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 SORTS = {"created_at": Campaign.created_at, "name": Campaign.name, "status": Campaign.status}
@@ -98,7 +100,8 @@ async def parse_spec(body: ParseSpecIn, p: CurrentPrincipal, db: DB) -> dict:
     ai = AIService(creds)
     if ai.available:
         try:
-            result = await ai.parse_research_spec(body.text)
+            profile = await get_profile(db, p.workspace_id)
+            result = await ai.parse_research_spec(body.text, profile.offerings or [])
             return {**result.output.model_dump(), "parser": result.provider, "cost_usd": result.cost_usd}
         except (AIUnavailable, AIRefused) as exc:
             return {**rule_based_spec(body.text), "warning": str(exc)}
@@ -146,7 +149,22 @@ async def estimate(body: CampaignCreate, p: CurrentPrincipal, db: DB) -> Estimat
     if body.settings.email_verification:
         cost += body.settings.max_companies * 2 * s.cost_hunter_per_request
     notes.append(f"Hard budget cap: ${body.settings.max_budget_usd:.2f}.")
-    return EstimateOut(providers=providers, estimated_requests=requests, estimated_cost_usd=round(cost, 3), notes=notes)
+    is_demo = body.is_demo or any(x.provider_key == "demo" for x in body.sources)
+    ws = await db.get(Workspace, p.workspace_id)
+    credits_max, balance = 0, None
+    if not ws.billing_exempt:
+        balance = ws.credit_balance
+        if not is_demo:  # the dashboard shows this translated, from credits_max and credit_balance
+            per = (await credit_svc.platform_settings(db)).credits_per_contact
+            credits_max = body.settings.max_companies * per
+    return EstimateOut(
+        providers=providers,
+        estimated_requests=requests,
+        estimated_cost_usd=round(cost, 3),
+        notes=notes,
+        credits_max=credits_max,
+        credit_balance=balance,
+    )
 
 
 @router.get("/{campaign_id}", response_model=CampaignOut)

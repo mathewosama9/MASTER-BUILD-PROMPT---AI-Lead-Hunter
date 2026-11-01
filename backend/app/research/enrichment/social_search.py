@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.research.enrichment.contacts import social_profile_url
+from app.research.geo import Place
 
 SEARCH_PLATFORMS = {
     "instagram": "instagram.com",
@@ -175,14 +176,31 @@ def build_query(business_name: str, city: str | None, platform: str) -> str:
 
 
 async def web_search(
-    query: str, *, brave_key: str, transport: httpx.AsyncBaseTransport | None = None
+    query: str,
+    *,
+    brave_key: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+    country: str | None = None,
+    count: int = 10,
+    offset: int = 0,
+    place: Place | None = None,
 ) -> list[SearchHit]:
-    """Run one query through the official Brave Search API (the only search backend; it needs a key)."""
+    """Run one query through the official Brave Search API (the only search backend; it needs a key).
+    `country` is a Brave country code (catalog `brave_country`, "ALL" for markets Brave has no code for)."""
+    params: dict = {"q": query, "count": count, "result_filter": "web"}
+    if country:
+        params["country"] = country  # "ALL" too: without it Brave assumes the US
+    if offset:
+        params["offset"] = offset
     async with httpx.AsyncClient(timeout=15.0, transport=transport) as client:
         resp = await client.get(
             BRAVE_URL,
-            params={"q": query, "count": 10, "result_filter": "web"},
-            headers={"Accept": "application/json", "X-Subscription-Token": brave_key},
+            params=params,
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": brave_key,
+                **(place.brave_headers() if place else {}),  # search from inside the target market
+            },
         )
     if resp.status_code in (401, 402, 403, 429):
         raise SearchBlocked(f"Brave Search returned {resp.status_code}")

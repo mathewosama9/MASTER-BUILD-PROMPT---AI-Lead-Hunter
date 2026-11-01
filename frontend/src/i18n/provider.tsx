@@ -11,10 +11,48 @@ interface I18nValue {
   setLocale: (l: Locale) => void;
   /** Translated label for an API enum key (source, stage, factor...), falling back to a humanized key. */
   label: (key: string | null | undefined) => string;
+  /** A data provider as customers see it: its generic group ("Business listings"), never the provider's name. */
+  source: (key: string | null | undefined) => string;
   /** Translated form-validation message; schema messages are dictionary keys. */
   vmsg: (msg: string | undefined) => string | undefined;
   /** Job event / live activity in the user's language (`data.t` template + `data.p` params), else `fallback`. */
   eventText: (data: unknown, fallback?: string | null) => string;
+}
+
+/** Provider key → customer-facing group. Keys not listed (import, manual, demo, heuristic) keep their own label. */
+const SOURCE_GROUP: Record<string, keyof Dictionary["sourceGroups"]> = {
+  google_maps: "listings",
+  osm: "listings",
+  directories: "listings",
+  brave: "web",
+  social_search: "web",
+  linkedin_search: "web",
+  person_search: "web",
+  website: "website",
+  structured_data: "website",
+  instagram: "social",
+  facebook: "social",
+  tiktok: "social",
+  snapchat: "social",
+  linkedin: "social",
+  x: "social",
+  social_discovery: "social",
+  hunter: "contacts",
+  apollo: "contacts",
+  lusha: "contacts",
+  decision_maker: "contacts",
+  deepseek: "ai",
+  anthropic: "ai",
+  openai: "ai",
+};
+
+function sourceName(t: Dictionary, key: string): string {
+  // Combined provenance such as "website+brave" lists each group once.
+  const parts = key.split("+").map((k) => {
+    const g = SOURCE_GROUP[k];
+    return g ? t.sourceGroups[g] : (t.labels[k] ?? humanize(k));
+  });
+  return [...new Set(parts)].join(" + ");
 }
 
 function humanize(key: string) {
@@ -27,12 +65,12 @@ function renderEvent(t: Dictionary, data: unknown, fallback: string): string {
   const template = typeof d.t === "string" ? t.events[d.t] : undefined;
   if (!template) return fallback;
   const params = d.p && typeof d.p === "object" ? (d.p as Record<string, unknown>) : {};
-  const label = (k: string) => t.labels[k] ?? humanize(k);
   return template.replace(/\{(\w+)\}/g, (_, name: string) => {
     const v = params[name];
     if (v === null || v === undefined || v === "") return "—";
     const s = String(v);
-    if (name === "provider" || name === "platform" || name === "mode") return label(s);
+    if (name === "provider") return sourceName(t, s);
+    if (name === "platform" || name === "mode") return t.labels[s] ?? humanize(s);
     if (name === "status") return t.status[s as keyof typeof t.status] ?? (t.labels[s] ?? s);
     if (name === "reason") return t.providerStatus[s as keyof typeof t.providerStatus] ?? s;
     return s;
@@ -91,6 +129,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       t,
       setLocale,
       label: (key) => (key ? (t.labels[key] ?? humanize(key)) : "—"),
+      source: (key) => (key ? sourceName(t, key) : "—"),
       // Unkeyed messages (zod defaults) are English; show a generic message in Arabic instead.
       vmsg: (msg) => (msg ? (validation[msg] ?? (locale === "ar" ? validation.invalid : msg)) : undefined),
       eventText: (data, fallback) => renderEvent(t, data, fallback ?? ""),

@@ -9,11 +9,13 @@ import { LeadsTable } from "./leads-table";
 
 export function LeadsPage() {
   const { t } = useI18n();
-  const campaignId = useSearchParams().get("campaign_id") ?? undefined;
+  const params = useSearchParams();
+  const campaignId = params.get("campaign_id") ?? undefined;
+  const crmStatus = params.get("crm_status") ?? "";
   return (
     <div>
       <PageHeader title={t.leads.title} subtitle={t.leads.subtitle} />
-      <LeadsTable key={campaignId ?? "all"} campaignId={campaignId} />
+      <LeadsTable key={`${campaignId ?? "all"}:${crmStatus}`} campaignId={campaignId} crmStatus={crmStatus} />
     </div>
   );
 }

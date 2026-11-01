@@ -144,6 +144,9 @@ class EstimateOut(BaseModel):
     estimated_requests: int
     estimated_cost_usd: float | None
     notes: list[str]
+    # Credits: at most one charge per new business delivered with a usable contact; 0 for demo/exempt.
+    credits_max: int = 0
+    credit_balance: int | None = None  # None when the workspace is not metered
 
 
 class ImportPreviewIn(BaseModel):

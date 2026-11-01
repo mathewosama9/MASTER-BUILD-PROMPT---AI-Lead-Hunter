@@ -75,6 +75,12 @@ class HunterClient:
         data = await self._call("GET", "/domain-search", "domain_search", params=params)
         return data.get("data") or {}
 
+    async def email_finder(self, domain: str, first_name: str, last_name: str) -> dict:
+        """The address Hunter has seen published for this person at this domain (with its sources), if any."""
+        params = {"domain": domain, "first_name": first_name, "last_name": last_name}
+        data = await self._call("GET", "/email-finder", "email_finder", params=params)
+        return data.get("data") or {}
+
     async def company(self, domain: str) -> dict:
         data = await self._call("GET", "/companies/find", "company_enrichment", params={"domain": domain})
         return data.get("data") or {}

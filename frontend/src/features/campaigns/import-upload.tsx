@@ -66,7 +66,7 @@ export function ImportUpload({ onRows, error }: { onRows: (rows: string[]) => vo
         {preview ? (
           <div className="rounded-md border p-3 text-xs" aria-live="polite">
             <p className="flex items-center gap-2 font-medium">
-              <FileSpreadsheet className="size-4 text-brand-500" />
+              <FileSpreadsheet className="size-4 text-rasd-500" />
               {t.wizard.importReady.replace("{n}", String(preview.rows.length))}
               {preview.rejected.length ? (
                 <span className="text-warning">· {t.wizard.importRejected.replace("{n}", String(preview.rejected.length))}</span>

@@ -3,6 +3,11 @@
 Every hop (including redirects) is resolved and checked against private, loopback,
 link-local, multicast and reserved ranges. Responses are size- and time-limited and
 robots.txt is honoured.
+
+The check is repeated where the TCP connection is opened, against the very address that is
+then dialled (`PinnedPublicBackend`), so a DNS answer that changes between the check and the
+connect (DNS rebinding) cannot reach an internal address. TLS still verifies the original
+hostname (SNI and certificate) and the Host header is unchanged.
 """
 
 import asyncio
@@ -13,6 +18,7 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
+import httpcore
 import httpx
 
 from app.core.config import get_settings
@@ -64,19 +70,68 @@ def validate_url_shape(url: str) -> str:
     return parsed.geturl()
 
 
-async def assert_public_host(host: str) -> None:
+async def _resolve(host: str) -> list[str]:
     try:
         ipaddress.ip_address(host)
-        candidates = [host]
+        return [host]
     except ValueError:
-        loop = asyncio.get_running_loop()
-        try:
-            infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-        except socket.gaierror as exc:
-            raise UnsafeURLError(f"DNS resolution failed for {host}") from exc
-        candidates = list({i[4][0] for i in infos})
+        pass
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise UnsafeURLError(f"DNS resolution failed for {host}") from exc
+    return list(dict.fromkeys(i[4][0] for i in infos))
+
+
+async def public_addresses(host: str) -> list[str]:
+    """Resolve `host`; every address must be public, otherwise the host is refused."""
+    candidates = await _resolve(host.strip("[]"))
     if not candidates or not all(_is_public_ip(ip) for ip in candidates):
         raise UnsafeURLError(f"Host {host} resolves to a non-public address")
+    return candidates
+
+
+async def assert_public_host(host: str) -> None:
+    await public_addresses(host)
+
+
+class PinnedPublicBackend(httpcore.AsyncNetworkBackend):
+    """Resolves and validates at connect time, then dials the validated IP itself (never the name)."""
+
+    def __init__(self, inner: httpcore.AsyncNetworkBackend | None = None) -> None:
+        self._inner = inner or httpcore.AnyIOBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options=None,  # noqa: ANN001 - httpcore's own type
+    ) -> httpcore.AsyncNetworkStream:
+        last_exc: Exception | None = None
+        for ip in await public_addresses(host):
+            try:
+                return await self._inner.connect_tcp(
+                    ip, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+                )
+            except httpcore.ConnectError as exc:
+                last_exc = exc
+        raise last_exc or httpcore.ConnectError(f"Could not connect to {host}")
+
+    async def connect_unix_socket(self, *args, **kwargs) -> httpcore.AsyncNetworkStream:  # noqa: ANN002, ANN003
+        raise UnsafeURLError("Unix sockets are not allowed")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+
+def pinned_transport() -> httpx.AsyncHTTPTransport:
+    transport = httpx.AsyncHTTPTransport()
+    # httpx has no public hook for the network backend; swap it on the pool it built (same TLS/limits config).
+    transport._pool._network_backend = PinnedPublicBackend()  # noqa: SLF001
+    return transport
 
 
 @dataclass
@@ -107,7 +162,7 @@ class SafeFetcher:
             timeout=httpx.Timeout(s.crawler_timeout_seconds),
             follow_redirects=False,
             headers={"User-Agent": self.user_agent, "Accept": "text/html,application/xhtml+xml"},
-            transport=transport,
+            transport=transport or (None if skip_dns_check else pinned_transport()),
         )
 
     async def __aenter__(self) -> "SafeFetcher":

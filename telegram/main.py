@@ -15,15 +15,31 @@ from bot.services.api import BackendClient
 
 log = logging.getLogger("bot")
 
-COMMANDS = [
-    BotCommand(command="start", description="Main menu"),
-    BotCommand(command="new", description="New campaign"),
-    BotCommand(command="campaigns", description="My campaigns"),
-    BotCommand(command="top", description="Top leads"),
-    BotCommand(command="link", description="Link your account: /link CODE"),
-    BotCommand(command="lang", description="Switch language EN/AR"),
-    BotCommand(command="help", description="Help"),
-]
+COMMANDS = {
+    "en": [("start", "Main menu"), ("new", "New search"), ("campaigns", "My searches"), ("top", "Best leads"),
+           ("balance", "My credits"), ("lang", "العربية / English"), ("help", "How it works")],
+    "ar": [("start", "القائمة الرئيسية"), ("new", "بحث جديد"), ("campaigns", "عمليات البحث"),
+           ("top", "أفضل العملاء"), ("balance", "رصيدي"), ("lang", "English / العربية"), ("help", "إزاي بيشتغل")],
+}
+DESCRIPTION = {
+    "en": "Rasd finds businesses that need what you sell — with their phone, WhatsApp and email — and tells you "
+          "why each one fits. Link your account from the dashboard to start.",
+    "ar": "رصد بيلاقيلك الشركات اللي محتاجة خدمتك — بتليفوناتها وواتسابها وإيميلاتها — وبيقولك ليه كل واحدة "
+          "مناسبة. اربط حسابك من لوحة التحكم عشان تبدأ.",
+}
+SHORT_DESCRIPTION = {"en": "Ready clients for your business, on Telegram.", "ar": "عملاء جاهزين لشغلك، على تيليجرام."}
+
+
+async def _setup_profile(bot) -> None:
+    """Menu commands and the bot's About texts in both languages (Telegram picks by the user's app language)."""
+    for lang, items in COMMANDS.items():
+        code = None if lang == "en" else lang
+        try:
+            await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in items], language_code=code)
+            await bot.set_my_description(DESCRIPTION[lang], language_code=code)
+            await bot.set_my_short_description(SHORT_DESCRIPTION[lang], language_code=code)
+        except Exception:  # cosmetic; never block the bot from starting
+            log.warning("could not update the bot profile for %s", lang, exc_info=True)
 
 
 def _storage():
@@ -52,7 +68,7 @@ async def run() -> None:
     api = BackendClient()
     bot = build_bot(s.telegram_bot_token)
     dp = build_dispatcher(api, _storage())
-    await bot.set_my_commands(COMMANDS)
+    await _setup_profile(bot)
     try:
         if s.telegram_webhook_url:
             await _run_webhook(bot, dp)

@@ -15,11 +15,51 @@ from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from app.core.safe_http import RobotsDisallowed, SafeFetcher, UnsafeURLError
 from app.research.enrichment.contacts import ExtractionResult, extract_contacts, parse_json_ld
+from app.research.enrichment.decision_makers import (
+    DecisionMaker,
+    contacts_near,
+    from_cards,
+    from_json_ld,
+    from_text,
+)
 from app.research.enrichment.normalize import normalize_domain
 
 log = logging.getLogger(__name__)
 
 PAGE_PATTERNS: dict[str, tuple[str, ...]] = {
+    # Checked before "about": team/leadership pages name the people who run the business.
+    "team": (
+        "team",
+        "leadership",
+        "management",
+        "our-doctors",
+        "doctors",
+        "physicians",
+        "founder",
+        "staff",
+        "board",
+        "directors",
+        "principal",
+        "our-people",
+        "faculty",
+        "partners",
+        "message-from",
+        "chairman",
+        "مجلس-الإدارة",
+        "مجلس الإدارة",
+        "كلمة-المدير",
+        "كلمة المدير",
+        "كلمة-المؤسس",
+        "كلمة الرئيس",
+        "الهيئة",
+        "فريق",
+        "الأطباء",
+        "أطباؤنا",
+        "اطباؤنا",
+        "الإدارة",
+        "الادارة",
+        "المؤسس",
+    ),
     "about": ("about", "who-we-are", "من-نحن", "من نحن", "عن"),
     "services": ("service", "treatment", "solutions", "products", "خدمات", "خدماتنا"),
     "contact": ("contact", "اتصل", "تواصل"),
@@ -88,6 +128,12 @@ class WebsiteResearch:
     structured_name: str | None = None
     address: str | None = None
     opening_hours: str | None = None
+    # Decision makers named on the site (schema.org data and clear "role: name" text); see decision_makers.
+    people: list[DecisionMaker] = field(default_factory=list)
+
+
+# How many pages of each kind to read; several team/management pages are common (board, doctors, management).
+KIND_LIMITS = {"team": 3, "about": 2}
 
 
 def _classify_link(href: str, text: str) -> str | None:
@@ -109,9 +155,10 @@ async def research_website(
     url: str,
     *,
     country: str | None,
-    max_pages: int = 5,
+    max_pages: int = 8,
     transport: httpx.AsyncBaseTransport | None = None,
     skip_dns_check: bool = False,
+    roles: tuple[str, ...] = (),
 ) -> WebsiteResearch:
     domain = normalize_domain(url)
     result = WebsiteResearch(url=url, reachable=False)
@@ -142,7 +189,7 @@ async def research_website(
             if normalize_domain(absolute) != domain or absolute.rstrip("/") == home.url.rstrip("/"):
                 continue
             kind = _classify_link(urlparse(absolute).path, a.text(strip=True))
-            if kind and kind not in to_visit.values():
+            if kind and absolute not in to_visit and _room(to_visit, kind):
                 to_visit[absolute] = kind
         result.pages.append(PageSnapshot(home.url, "home", result.title, _visible_text(HTMLParser(home.text))))
         _apply_structured(result, home.text)
@@ -150,10 +197,13 @@ async def research_website(
         if not {"about", "contact"} <= set(to_visit.values()):
             # JS-built menus hide links from plain HTML; the sitemap usually still lists the pages.
             for page_url, kind in (await _sitemap_pages(fetcher, home.url, domain)).items():
-                if kind not in to_visit.values():
+                if page_url not in to_visit and _room(to_visit, kind):
                     to_visit[page_url] = kind
 
-        for page_url, kind in list(to_visit.items())[: max(0, max_pages - 1)]:
+        # Pages that name the people and contacts are read first when the page budget is small.
+        order = {"about": 0, "team": 1, "contact": 2, "booking": 3, "services": 4, "faq": 5}
+        ranked = sorted(to_visit.items(), key=lambda kv: order.get(kv[1], 9))
+        for page_url, kind in ranked[: max(0, max_pages - 1)]:
             try:
                 page = await fetcher.get(page_url)
             except (RobotsDisallowed, UnsafeURLError, httpx.HTTPError) as exc:
@@ -164,13 +214,41 @@ async def research_website(
             raw_html[page.url] = page.text
             ptree = HTMLParser(page.text)
             title = ptree.css_first("title").text(strip=True) if ptree.css_first("title") else None
-            result.pages.append(PageSnapshot(page.url, kind, title, _visible_text(ptree)))
+            limit = 4000 if kind in ("about", "team") else 2500
+            result.pages.append(PageSnapshot(page.url, kind, title, _visible_text(ptree, limit)))
 
     for page_url, html in raw_html.items():
         for c in extract_contacts(html, page_url, country, domain).contacts:
             result.contacts.add(c)
     result.signals = _detect_signals(raw_html, result)
+    kinds = {p.url: p.kind for p in result.pages}
+    for page_url, html in raw_html.items():
+        result.people.extend(from_json_ld(html, page_url))
+        if kinds.get(page_url) in ("home", "about", "team", "contact"):
+            result.people.extend(from_cards(html, page_url, roles))
+    for page in result.pages:
+        if page.kind in ("home", "about", "team", "contact"):
+            result.people.extend(from_text(page.excerpt, page.url, "website", extra_roles=roles))
+    # A person's own email/phone/WhatsApp/profiles printed next to their name. Values printed on several pages
+    # (header/footer lines) are the business's, not the person's.
+    shared = _sitewide_values(raw_html, country, domain)
+    for page_url, html in raw_html.items():
+        contacts_near(html, result.people, page_url, country, shared=shared)
     return result
+
+
+def _room(to_visit: dict[str, str], kind: str) -> bool:
+    return sum(1 for k in to_visit.values() if k == kind) < KIND_LIMITS.get(kind, 1)
+
+
+def _sitewide_values(raw_html: dict[str, str], country: str | None, domain: str | None) -> set[str]:
+    seen: dict[str, int] = {}
+    for page_url, html in raw_html.items():
+        for c in extract_contacts(html, page_url, country, domain).contacts:
+            seen[c.normalized_value] = seen.get(c.normalized_value, 0) + 1
+    if len(raw_html) == 1:
+        return set()
+    return {v for v, n in seen.items() if n >= 2}
 
 
 def _apply_structured(result: WebsiteResearch, html: str) -> None:
@@ -216,7 +294,7 @@ async def _sitemap_pages(fetcher: SafeFetcher, home_url: str, domain: str | None
                         next_queue.append(loc)
                     continue
                 kind = _classify_link(urlparse(loc).path, "")
-                if kind and kind not in found.values():
+                if kind and loc not in found and _room(found, kind):
                     found[loc] = kind
         queue = next_queue
         if not queue:

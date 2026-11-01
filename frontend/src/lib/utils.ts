@@ -38,3 +38,16 @@ export function humanize(key: string | null | undefined) {
   if (!key) return "—";
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+/** Resolve a post-login `next` value to a same-origin path, or `fallback` for anything else. */
+export function safeNextPath(next: string | null | undefined, origin: string, fallback = "/") {
+  if (!next) return fallback;
+  let url: URL;
+  try {
+    url = new URL(next, origin);
+  } catch {
+    return fallback;
+  }
+  if (url.origin !== origin) return fallback;
+  return url.pathname + url.search;
+}

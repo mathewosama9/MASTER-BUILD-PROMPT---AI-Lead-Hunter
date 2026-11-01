@@ -62,7 +62,8 @@ export async function api<T>(
     } catch {
       /* non-JSON error body */
     }
-    if (res.status === 401 && typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+    const onAuthPage = typeof window !== "undefined" && ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email"].some((p) => window.location.pathname.startsWith(p));
+    if (res.status === 401 && typeof window !== "undefined" && !onAuthPage) {
       // Outside React: a hard navigation also clears all client caches for the expired session.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;

@@ -6,11 +6,13 @@ in-process SQLite database so unit tests run anywhere. Redis is optional: event 
 
 import os
 import uuid
+from datetime import UTC, datetime
 
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("DEMO_MODE", "true")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-unit-tests-only")
 os.environ.setdefault("TELEGRAM_SERVICE_TOKEN", "test-service-token")
+os.environ.setdefault("GEO_CITY_LOOKUP", "false")  # no Nominatim calls from tests
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("REDIS_URL", os.environ.get("TEST_REDIS_URL", "redis://localhost:1/0"))
 for key in (
@@ -69,19 +71,51 @@ def dispatched(monkeypatch):
     return calls
 
 
-async def make_user(db, *, role: Role = Role.OWNER, workspace: Workspace | None = None) -> tuple[User, Workspace]:
+async def make_user(
+    db, *, role: Role = Role.OWNER, workspace: Workspace | None = None, billing_exempt: bool = True
+) -> tuple[User, Workspace]:
+    """New workspaces are unmetered unless `billing_exempt=False` (credit tests set balances themselves)."""
     if workspace is None:
-        workspace = Workspace(name=f"WS {uuid.uuid4().hex[:6]}", slug=f"ws-{uuid.uuid4().hex[:10]}", settings={})
+        workspace = Workspace(
+            name=f"WS {uuid.uuid4().hex[:6]}",
+            slug=f"ws-{uuid.uuid4().hex[:10]}",
+            settings={},
+            billing_exempt=billing_exempt,
+        )
         db.add(workspace)
         await db.flush()
     user = User(
-        email=f"user-{uuid.uuid4().hex[:8]}@example.com", password_hash=hash_password(PASSWORD), full_name="Test User"
+        email=f"user-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash=hash_password(PASSWORD),
+        full_name="Test User",
+        email_verified_at=datetime.now(UTC),
     )
     db.add(user)
     await db.flush()
     db.add(WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role=role))
     await db.commit()
     return user, workspace
+
+
+@pytest.fixture
+def outbox(monkeypatch):
+    """Capture account emails (reset / confirmation) instead of sending them."""
+    sent: list[dict] = []
+
+    async def fake_send(to, subject, text, html=None):
+        sent.append({"to": to, "subject": subject, "text": text, "html": html})
+        return True
+
+    monkeypatch.setattr("app.services.accounts.send_email", fake_send)
+    return sent
+
+
+def link_token(mail: dict) -> str:
+    """The token from the link in a captured email."""
+    from urllib.parse import parse_qs, urlparse
+
+    url = next(line for line in mail["text"].splitlines() if "token=" in line).strip()
+    return parse_qs(urlparse(url).query)["token"][0]
 
 
 @pytest.fixture
@@ -102,6 +136,22 @@ async def login(app, email: str) -> httpx.AsyncClient:
 @pytest.fixture
 async def owner(db):
     return await make_user(db)
+
+
+@pytest.fixture
+async def platform_admin(db, owner):
+    """Make the test owner a platform admin, who alone manages the platform-wide API keys and linked accounts.
+
+    Platform rows (workspace_id NULL) are shared by every workspace, so they are removed afterwards."""
+    from sqlalchemy import delete
+
+    from app.models import ProviderConfiguration
+
+    owner[0].is_superuser = True
+    await db.commit()
+    yield owner
+    await db.execute(delete(ProviderConfiguration).where(ProviderConfiguration.workspace_id.is_(None)))
+    await db.commit()
 
 
 @pytest.fixture

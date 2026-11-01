@@ -50,6 +50,7 @@ def internal_token() -> str:
 
 class _State:
     platform: str | None = None
+    login_id: str | None = None  # opaque id from the API; /capture and /cancel must present it
     started: float = 0.0
     xvnc: subprocess.Popen | None = None
     pw: Any = None
@@ -85,7 +86,7 @@ async def _teardown() -> None:
             log.warning("could not remove %s: %s", leftover, exc)
     if state.workdir is not None:
         state.workdir.cleanup()
-    state.platform, state.xvnc, state.pw, state.browser, state.context, state.workdir = (None,) * 6
+    state.platform, state.login_id, state.xvnc, state.pw, state.browser, state.context, state.workdir = (None,) * 7
 
 
 async def _watchdog() -> None:
@@ -105,7 +106,7 @@ async def lifespan(_: FastAPI):  # noqa: ANN201
     await _teardown()
 
 
-app = FastAPI(title="AI Lead Hunter login browser", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title="Rasd login browser", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 
 def _auth(token: str | None) -> None:
@@ -115,6 +116,18 @@ def _auth(token: str | None) -> None:
 
 class StartIn(BaseModel):
     platform: str
+    login_id: str
+
+
+class LoginRef(BaseModel):
+    login_id: str
+
+
+def _check_login(login_id: str) -> None:
+    if not state.platform or state.context is None or state.login_id is None:
+        raise HTTPException(status_code=409, detail="no login in progress")
+    if not secrets.compare_digest(login_id, state.login_id):
+        raise HTTPException(status_code=409, detail="this login was replaced or has ended")
 
 
 @app.get("/healthz")
@@ -173,24 +186,25 @@ async def start(body: StartIn, x_internal_token: str | None = Header(default=Non
         state.context = await state.browser.new_context(no_viewport=True)
         page = await state.context.new_page()
         await page.goto(LOGIN_URLS[body.platform], wait_until="domcontentloaded")
-        state.platform, state.started = body.platform, time.time()
+        state.platform, state.login_id, state.started = body.platform, body.login_id, time.time()
         return {"platform": body.platform, "vnc_password": password}
 
 
 @app.post("/capture")
-async def capture(x_internal_token: str | None = Header(default=None)) -> dict:
+async def capture(body: LoginRef, x_internal_token: str | None = Header(default=None)) -> dict:
     _auth(x_internal_token)
     async with lock:
-        if not state.platform or state.context is None:
-            raise HTTPException(status_code=409, detail="no login in progress")
+        _check_login(body.login_id)
         # The browser stays open: if the API rejects the cookies (login not finished) the user can continue.
         # The API calls /cancel after a successful save.
         return {"platform": state.platform, "storage_state": await state.context.storage_state()}
 
 
 @app.post("/cancel")
-async def cancel(x_internal_token: str | None = Header(default=None)) -> dict:
+async def cancel(body: LoginRef, x_internal_token: str | None = Header(default=None)) -> dict:
     _auth(x_internal_token)
     async with lock:
+        if state.platform is not None:  # nothing open: cancelling is a no-op
+            _check_login(body.login_id)
         await _teardown()
     return {"status": "cancelled"}

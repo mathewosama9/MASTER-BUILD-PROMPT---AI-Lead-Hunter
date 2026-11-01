@@ -1,12 +1,12 @@
-# AI Lead Hunter — Intelligent B2B Prospecting Platform
+# Rasd (رصد) — client finding for service businesses
 
 Discovers businesses from authorized sources, enriches **published business contact channels**, analyses
 opportunities with **evidence-grounded AI**, scores leads deterministically, and manages them in a CRM.
 A web dashboard (EN/AR, RTL) and a Telegram bot share **one** FastAPI backend, database and job queue.
 
-Branding follows the *codex* brand guideline: Navy `#0E0F31`, Blue `#1D79FF`/`#0049B2`/`#4E94FF`,
-Yellow `#FFC100`, Indigo `#4B4D83`, Lavender `#C5C6E3`, Ghost `#F2F3FF`. The English font is Neue Montreal
-(licensed, see `frontend/public/fonts/README.md`). Arabic uses Rubik and Noto Sans Arabic.
+Brand: **Rasd (رصد)**, a radar that spots your next clients. Ink `#071A17`, Rasd green `#0B8A63`,
+Signal lime `#C8F169`, Paper `#F7F7F2` (tokens in `frontend/src/app/globals.css`). Fonts: Readex Pro (headings)
+and IBM Plex Sans Arabic (text), both loaded with `next/font`. Marketing copy never names data providers.
 
 ---
 

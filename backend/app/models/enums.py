@@ -111,3 +111,49 @@ class TelegramLinkStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     REVOKED = "revoked"
+
+
+class CreditKind(StrEnum):
+    TRIAL_GRANT = "trial_grant"
+    PURCHASE = "purchase"
+    MANUAL_ADJUST = "manual_adjust"
+    CAMPAIGN_CHARGE = "campaign_charge"
+    REFUND = "refund"
+
+
+class TopUpStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class ContactInterest(StrEnum):
+    DEMO = "demo"
+    SALES = "sales"
+    SUPPORT = "support"
+    PARTNERSHIP = "partnership"
+    # Kept for requests stored before the rebrand; the site no longer offers them.
+    LEAD_HUNTER = "lead_hunter"
+    WHATSAPP_BOT = "whatsapp_bot"
+    BOOKING = "booking"
+    WEBSITE = "website"
+    CRM = "crm"
+    OTHER = "other"
+
+
+class PaymentMethod(StrEnum):
+    INSTAPAY = "instapay"
+    BANK_TRANSFER = "bank_transfer"
+    VODAFONE_CASH = "vodafone_cash"
+
+
+class TestimonialSource(StrEnum):
+    IN_APP = "in_app"
+    MANUAL = "manual"
+    SAMPLE = "sample"
+
+
+class TestimonialStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    HIDDEN = "hidden"

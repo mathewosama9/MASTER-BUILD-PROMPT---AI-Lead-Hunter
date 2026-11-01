@@ -135,11 +135,11 @@ export function Checkbox({
 /* ---------- Badge ---------- */
 const badgeTones = {
   neutral: "bg-muted text-muted-foreground",
-  blue: "bg-brand-100 text-brand-700 dark:bg-brand-700/25 dark:text-brand-200",
+  blue: "bg-rasd-100 text-rasd-700 dark:bg-rasd-700/25 dark:text-rasd-200",
   yellow: "bg-sun-100 text-[#7a5700] dark:bg-sun-500/15 dark:text-sun-400",
   green: "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300",
   red: "bg-rose-100 text-rose-800 dark:bg-rose-500/15 dark:text-rose-300",
-  indigo: "bg-lavender-300/40 text-indigo-500 dark:bg-indigo-500/30 dark:text-lavender-300",
+  indigo: "bg-mist-300/40 text-mist-500 dark:bg-mist-500/30 dark:text-mist-300",
 } as const;
 export type BadgeTone = keyof typeof badgeTones;
 
@@ -173,10 +173,10 @@ export function Progress({ value, label }: { value: number | null | undefined; l
       className="relative h-2 w-full overflow-hidden rounded-full bg-muted"
     >
       {indeterminate ? (
-        <div className="animate-indeterminate absolute inset-y-0 w-1/3 rounded-full bg-brand-500/70" />
+        <div className="animate-indeterminate absolute inset-y-0 w-1/3 rounded-full bg-rasd-500/70" />
       ) : (
         <div
-          className="h-full rounded-full bg-gradient-to-r from-brand-500 to-brand-400 transition-[width] duration-500 rtl:bg-gradient-to-l"
+          className="h-full rounded-full bg-gradient-to-r from-rasd-500 to-rasd-400 transition-[width] duration-500 rtl:bg-gradient-to-l"
           style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
         />
       )}
@@ -234,7 +234,7 @@ export function Dialog({
   return (
     <RDialog.Root open={open} onOpenChange={onOpenChange}>
       <RDialog.Portal>
-        <RDialog.Overlay className="fixed inset-0 z-50 bg-navy-950/60 backdrop-blur-sm" />
+        <RDialog.Overlay className="fixed inset-0 z-50 bg-ink-950/60 backdrop-blur-sm" />
         <RDialog.Content className={`fixed left-1/2 top-1/2 z-50 grid max-h-[90vh] w-[calc(100%-2rem)] ${wide ? "max-w-5xl" : "max-w-lg"} -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-lg border bg-card p-6 shadow-xl`}>
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -266,7 +266,7 @@ export function Tip({ content, children }: { content: React.ReactNode; children:
         <RTooltip.Portal>
           <RTooltip.Content
             sideOffset={6}
-            className="z-50 max-w-xs rounded-md bg-navy-900 px-2.5 py-1.5 text-xs text-ghost-50 shadow-lg"
+            className="z-50 max-w-xs rounded-md bg-ink-900 px-2.5 py-1.5 text-xs text-paper shadow-lg"
           >
             {content}
           </RTooltip.Content>

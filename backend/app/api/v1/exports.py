@@ -89,7 +89,7 @@ async def campaign_report(campaign_id: uuid.UUID, p: CurrentPrincipal, db: DB) -
 
 @router.post("/google-sheets")
 async def export_google_sheets(
-    p: CurrentPrincipal, db: DB, f: LeadFilters = Filters, title: str = Query("AI Lead Hunter export", max_length=100)
+    p: CurrentPrincipal, db: DB, f: LeadFilters = Filters, title: str = Query("Rasd export", max_length=100)
 ) -> dict:
     creds, _ = await provider_svc.credentials_for(db, p.workspace_id, "google_sheets")
     if not creds.get("credentials_json"):

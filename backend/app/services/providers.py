@@ -12,11 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from app.core.redis import async_redis
-from app.models import ProviderConfiguration, ProviderUsage
+from app.models import Business, LeadAssessment, OutreachDraft, ProviderConfiguration, ProviderUsage
 from app.models.enums import ProviderStatus
 from app.research.providers.base import ProviderContext, ProviderInfo, ProviderState
 from app.research.providers.registry import (
     INTEGRATIONS,
+    credential_key,
     discovery_providers,
     env_credentials,
     get_discovery_provider,
@@ -25,12 +26,20 @@ from app.research.providers.registry import (
 log = logging.getLogger(__name__)
 
 
-async def get_config(db: AsyncSession, workspace_id: uuid.UUID, key: str) -> ProviderConfiguration | None:
-    return await db.scalar(
-        select(ProviderConfiguration).where(
-            ProviderConfiguration.workspace_id == workspace_id, ProviderConfiguration.provider_key == key
+async def get_config(
+    db: AsyncSession, workspace_id: uuid.UUID | None, key: str, *, fallback: bool = True
+) -> ProviderConfiguration | None:
+    """The workspace's own row if it has one, else the platform-wide row (`workspace_id=None` asks for that one)."""
+    platform = ProviderConfiguration.workspace_id.is_(None)
+    if workspace_id is not None:
+        own = await db.scalar(
+            select(ProviderConfiguration).where(
+                ProviderConfiguration.workspace_id == workspace_id, ProviderConfiguration.provider_key == key
+            )
         )
-    )
+        if own is not None or not fallback:
+            return own
+    return await db.scalar(select(ProviderConfiguration).where(platform, ProviderConfiguration.provider_key == key))
 
 
 async def record_outcome(
@@ -45,21 +54,24 @@ async def record_outcome(
     cfg.last_tested_at = datetime.now(UTC).isoformat()
 
 
-async def credentials_for(db: AsyncSession, workspace_id: uuid.UUID, key: str) -> tuple[dict[str, str], str | None]:
-    """Return (credentials, source) where source is 'env', 'workspace' or None."""
+async def credentials_for(
+    db: AsyncSession, workspace_id: uuid.UUID | None, key: str
+) -> tuple[dict[str, str], str | None]:
+    """Return (credentials, source) where source is 'env', 'workspace', 'platform' or None."""
     env = env_credentials(key)
     if env:
         return env, "env"
-    cfg = await get_config(db, workspace_id, key)
+    cfg = await get_config(db, workspace_id, credential_key(key))
     if cfg and cfg.encrypted_credentials:
         raw = decrypt_secret(cfg.encrypted_credentials)
         if raw:
-            return json.loads(raw), "workspace"
+            return json.loads(raw), ("platform" if cfg.workspace_id is None else "workspace")
     return {}, None
 
 
-async def save_credentials(db: AsyncSession, workspace_id: uuid.UUID, key: str, creds: dict[str, str]) -> None:
-    cfg = await get_config(db, workspace_id, key)
+async def save_credentials(db: AsyncSession, workspace_id: uuid.UUID | None, key: str, creds: dict[str, str]) -> None:
+    """Write to exactly the given scope (`None` = platform-wide), never to the row it would fall back to."""
+    cfg = await get_config(db, workspace_id, key, fallback=False)
     if cfg is None:
         cfg = ProviderConfiguration(workspace_id=workspace_id, provider_key=key, settings={})
         db.add(cfg)
@@ -150,23 +162,63 @@ async def provider_state(db: AsyncSession, workspace_id: uuid.UUID, key: str) ->
     return state
 
 
-async def monthly_usage(db: AsyncSession, workspace_id: uuid.UUID) -> dict[str, dict]:
+async def monthly_usage(db: AsyncSession, workspace_id: uuid.UUID | None) -> dict[str, dict]:
+    """This month's requests and cost per provider; `None` = across all workspaces (platform admin view)."""
     start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    scope = [] if workspace_id is None else [ProviderUsage.workspace_id == workspace_id]
     rows = await db.execute(
         select(ProviderUsage.provider_key, func.count(), func.coalesce(func.sum(ProviderUsage.cost_usd), 0.0))
-        .where(ProviderUsage.workspace_id == workspace_id, ProviderUsage.created_at >= start)
+        .where(*scope, ProviderUsage.created_at >= start)
         .group_by(ProviderUsage.provider_key)
     )
-    return {k: {"requests": int(n), "cost_usd": round(float(c), 4)} for k, n, c in rows.all()}
+    usage: dict[str, list[float]] = {k: [int(n), float(c)] for k, n, c in rows.all()}
+    # AI lead analyses and outreach drafts store their cost on their own rows, not in provider_usage.
+    for model in (LeadAssessment, OutreachDraft):
+        ai_rows = await db.execute(
+            select(model.provider, func.count(), func.coalesce(func.sum(model.cost_usd), 0.0))
+            .join(Business, Business.id == model.business_id)
+            .where(
+                *([] if workspace_id is None else [Business.workspace_id == workspace_id]), model.created_at >= start
+            )
+            .group_by(model.provider)
+        )
+        for k, n, c in ai_rows.all():
+            cur = usage.setdefault(k, [0, 0.0])
+            cur[0] += int(n)
+            cur[1] += float(c)
+    return {k: {"requests": int(n), "cost_usd": round(c, 4)} for k, (n, c) in usage.items()}
 
 
-async def list_providers(db: AsyncSession, workspace_id: uuid.UUID) -> list[dict]:
-    usage = await monthly_usage(db, workspace_id)
+async def list_providers(db: AsyncSession, workspace_id: uuid.UUID | None, *, public: bool = False) -> list[dict]:
+    """Every provider with its status. `public=True` (customers) keeps only what the campaign wizard needs:
+    no credentials, costs, settings or error text."""
+    usage = {} if public else await monthly_usage(db, workspace_id)
     out: list[dict] = []
     infos: list[ProviderInfo] = [p.info for p in discovery_providers()] + list(INTEGRATIONS.values())
     for info in infos:
         state = await provider_state(db, workspace_id, info.key)
         cfg = await get_config(db, workspace_id, info.key)
+        if public:
+            out.append(
+                {
+                    "key": info.key,
+                    "name": info.name,
+                    "kind": info.kind,
+                    "description": "",
+                    "requires": [],
+                    "docs_url": None,
+                    "status": state.status.value,
+                    "status_detail": None,
+                    "enabled": cfg.enabled if cfg else True,
+                    "credential_source": None,
+                    "credentials_masked": {},
+                    "settings": {},
+                    "last_tested_at": None,
+                    "last_error": None,
+                    "usage_month": {"requests": 0, "cost_usd": 0.0},
+                }
+            )
+            continue
         creds, source = await credentials_for(db, workspace_id, info.key)
         out.append(
             {

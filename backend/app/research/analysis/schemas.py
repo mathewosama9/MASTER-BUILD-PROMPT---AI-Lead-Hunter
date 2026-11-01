@@ -5,19 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ServiceKey = Literal[
-    "ai_support_agent",
-    "whatsapp_automation",
-    "n8n_automation",
-    "crm_integration",
-    "appointment_automation",
-    "website_development",
-    "ecommerce_development",
-    "lead_management",
-    "ai_sales_assistant",
-    "process_automation",
-]
-
 
 class ObservedSignal(BaseModel):
     signal: str = Field(description="What was directly observed, e.g. 'The website has a contact form'.")
@@ -31,7 +18,8 @@ class Hypothesis(BaseModel):
 
 
 class ServiceRecommendation(BaseModel):
-    service: ServiceKey
+    service: str = Field(description="The id of one of the seller's offerings (from <seller_profile>).")
+    name: str = Field(default="", description="That offering's name.")
     rationale: str
     evidence_ids: list[str]
 
@@ -61,7 +49,12 @@ class ResearchSpec(BaseModel):
     keywords: list[str] = Field(description="Search keywords in the language(s) of the market (English and Arabic).")
     excluded_keywords: list[str]
     characteristics: list[str] = Field(description="Desired business characteristics mentioned by the user.")
-    services: list[ServiceKey] = Field(description="Services the user wants to sell, if implied.")
+    services: list[str] = Field(description="Ids of the seller's offerings the request is about, if implied.")
+    decision_roles: list[str] = Field(
+        default_factory=list,
+        description="Job titles of the people to reach at each prospect if stated or clearly implied "
+        "(e.g. 'Principal', 'Procurement Manager', 'مدير المدرسة'), in English and Arabic.",
+    )
     language: Literal["en", "ar"]
 
 

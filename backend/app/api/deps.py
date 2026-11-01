@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import Forbidden, Unauthorized
-from app.core.security import constant_time_equals, decode_access_token
+from app.core.security import constant_time_equals, decode_access_token, password_fingerprint
 from app.models import AuditLog, TelegramAccount, User, WorkspaceMember
 from app.models.enums import ROLE_RANK, Role, TelegramLinkStatus
 
@@ -69,6 +69,7 @@ async def get_principal(request: Request, db: DB) -> Principal:
         member = await _membership(db, account.user_id, account.workspace_id)
         if user is None or not user.is_active or user.deleted_at or member is None:
             raise Forbidden("Linked user is inactive")
+        _check_not_suspended(user, member)
         return Principal(user, account.workspace_id, Role(member.role), "telegram", account)
 
     token: str | None = None
@@ -91,13 +92,32 @@ async def get_principal(request: Request, db: DB) -> Principal:
     user = await db.get(User, uuid.UUID(payload["sub"]))
     if user is None or not user.is_active or user.deleted_at is not None:
         raise Unauthorized("User inactive")
+    # Sessions issued before a password change or reset are no longer valid.
+    if "pv" in payload and payload["pv"] != password_fingerprint(user.password_hash):
+        raise Unauthorized("Session expired or invalid")
     member = await _membership(db, user.id, uuid.UUID(payload["ws"]))
     if member is None:
         raise Forbidden("No access to this workspace")
+    _check_not_suspended(user, member)
     return Principal(user, member.workspace_id, Role(member.role), via)
 
 
+def _check_not_suspended(user: User, member: WorkspaceMember) -> None:
+    # Platform admins keep access so they can always reach /admin (and lift a suspension).
+    if member.workspace.suspended_at is not None and not user.is_superuser:
+        raise Forbidden("This workspace is suspended. Contact support.", code="workspace_suspended")
+
+
 CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
+
+
+async def _superuser(p: CurrentPrincipal) -> Principal:
+    if not p.user.is_superuser:
+        raise Forbidden("Platform admins only")
+    return p
+
+
+SuperPrincipal = Annotated[Principal, Depends(_superuser)]
 
 
 def require_role(role: Role):  # noqa: ANN201

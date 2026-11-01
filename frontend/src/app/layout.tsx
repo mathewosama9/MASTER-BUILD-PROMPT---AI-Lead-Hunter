@@ -1,42 +1,37 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Noto_Sans_Arabic, Rubik } from "next/font/google";
+import { IBM_Plex_Sans_Arabic, Readex_Pro } from "next/font/google";
 
 import { Providers } from "@/components/providers";
+import { SITE_URL } from "@/lib/site";
 
 import "./globals.css";
 
-// Neue Montreal (brand EN font) is loaded via @font-face from /public/fonts when the licensed files are
-// present; Inter is the metric-compatible fallback. Arabic uses the brand's Rubik + Noto Sans Arabic.
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"], display: "swap" });
-const rubik = Rubik({ variable: "--font-rubik", subsets: ["arabic", "latin"], weight: ["500", "700"], display: "swap" });
-const notoArabic = Noto_Sans_Arabic({
-  variable: "--font-noto-arabic",
-  subsets: ["arabic"],
-  weight: ["300", "400", "500"],
+// Rasd brand fonts: Readex Pro for headings and IBM Plex Sans Arabic for text. Both cover Arabic and Latin.
+const readex = Readex_Pro({ variable: "--font-readex", subsets: ["arabic", "latin"], weight: ["400", "500", "600", "700"], display: "swap" });
+const plexArabic = IBM_Plex_Sans_Arabic({
+  variable: "--font-plex-arabic",
+  subsets: ["arabic", "latin"],
+  weight: ["300", "400", "500", "600", "700"],
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: { default: "AI Lead Hunter", template: "%s · AI Lead Hunter" },
-  description: "Intelligent B2B prospecting: discovery, enrichment, evidence-based AI analysis and lead scoring.",
-  icons: { icon: "/logo.svg" },
+  metadataBase: new URL(SITE_URL),
+  title: { default: "رصد · Rasd", template: "%s · رصد" },
+  description: "رصد يلاقي الشركات اللي محتاجة خدمتك، ويجمع أرقامها وواتسابها، ويقولك ليه كل واحدة محتاجاك.",
+  applicationName: "Rasd",
 };
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#0e0f31" },
-    { media: "(prefers-color-scheme: light)", color: "#f2f3ff" },
+    { media: "(prefers-color-scheme: dark)", color: "#04110e" },
+    { media: "(prefers-color-scheme: light)", color: "#f7f7f2" },
   ],
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="ar"
-      dir="rtl"
-      suppressHydrationWarning
-      className={`${inter.variable} ${rubik.variable} ${notoArabic.variable} h-full antialiased`}
-    >
+    <html lang="ar" dir="rtl" suppressHydrationWarning className={`${readex.variable} ${plexArabic.variable} h-full antialiased`}>
       <body className="min-h-full">
         <Providers>{children}</Providers>
       </body>

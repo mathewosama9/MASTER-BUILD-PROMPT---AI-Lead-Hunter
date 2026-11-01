@@ -6,6 +6,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.models.enums import ProviderStatus
+from app.research import geo
 from app.research.catalog import COUNTRIES
 from app.research.enrichment.normalize import business_domain, homepage_url
 from app.research.providers.base import (
@@ -66,11 +67,15 @@ class BraveSearchProvider:
         await ctx.record_usage(self.info.key, "web_search", 1, cost, True, resp.status_code)
         return resp.json()
 
-    def _client(self, ctx: ProviderContext) -> httpx.AsyncClient:
+    def _client(self, ctx: ProviderContext, place: geo.Place | None = None) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             timeout=15.0,
             transport=self._transport,
-            headers={"Accept": "application/json", "X-Subscription-Token": ctx.credentials.get("api_key", "")},
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": ctx.credentials.get("api_key", ""),
+                **(place.brave_headers() if place else {}),
+            },
         )
 
     async def search_businesses(self, query: SearchQuery, ctx: ProviderContext) -> list[BusinessCandidate]:
@@ -79,9 +84,12 @@ class BraveSearchProvider:
             raise ProviderError(state.detail or "Brave Search not configured")
         country = COUNTRIES.get(query.country.upper())
         brave_country = country["brave_country"] if country else "ALL"
-        queries = build_search_queries(query, max_queries=int(ctx.settings.get("max_queries", 8)))
+        queries = build_search_queries(
+            query, max_queries=int(ctx.settings.get("max_queries", get_settings().brave_max_queries))
+        )
         found: dict[str, BusinessCandidate] = {}
-        async with self._client(ctx) as client:
+        place = await geo.locate(query.country, query.city, query.region)
+        async with self._client(ctx, place) as client:
             for q in queries:
                 for page in range(0, MAX_OFFSET + 1):
                     params = {

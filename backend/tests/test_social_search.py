@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.models import Business, BusinessContact, CampaignRun, JobEvent
+from app.models import Business, BusinessContact, CampaignLead, CampaignRun, JobEvent
 from app.research.enrichment.social_search import (
     NAME_ONLY_NOTE,
     SearchBlocked,
@@ -155,8 +155,13 @@ async def test_campaign_finds_missing_profiles_by_name(client, dispatched, db, m
     cid, pages = await _run_site_campaign(client, monkeypatch, search)
 
     # Instagram and Snapchat were linked on the website, so only Facebook and TikTok were searched.
-    assert sorted(q.split("site:")[1] for q in queries) == ["facebook.com", "tiktok.com"]
-    biz = await db.scalar(select(Business).where(Business.normalized_domain == "smile-dental.sa"))
+    business_queries = [q for q in queries if not q.startswith('"Smile Dental" (') and "linkedin.com/in" not in q]
+    assert sorted(q.split("site:")[1] for q in business_queries) == ["facebook.com", "tiktok.com"]
+    biz = await db.scalar(
+        select(Business)
+        .join(CampaignLead, CampaignLead.business_id == Business.id)
+        .where(CampaignLead.campaign_id == cid)
+    )
     found = (
         await db.scalars(
             select(BusinessContact).where(

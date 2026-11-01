@@ -8,7 +8,22 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from sqlalchemy import text
 
-from app.api.v1 import auth, campaigns, dashboard, exports, leads, providers, settings, telegram
+from app.api.v1 import (
+    admin,
+    admin_insights,
+    auth,
+    billing,
+    campaigns,
+    dashboard,
+    exports,
+    leads,
+    profile,
+    providers,
+    public,
+    reviews,
+    settings,
+    telegram,
+)
 from app.core.config import get_settings
 from app.core.db import get_sessionmaker
 from app.core.errors import register_error_handlers
@@ -22,7 +37,7 @@ def create_app() -> FastAPI:
     s = get_settings()
     configure_logging(s.log_level)
     app = FastAPI(
-        title="AI Lead Hunter API",
+        title="Rasd API",
         version="0.1.0",
         description="B2B lead discovery, enrichment, AI analysis and scoring. All endpoints are under /api/v1.",
         docs_url="/api/docs",
@@ -67,6 +82,12 @@ def create_app() -> FastAPI:
         providers.router,
         telegram.router,
         settings.router,
+        profile.router,
+        public.router,
+        billing.router,
+        admin.router,
+        admin_insights.router,
+        reviews.router,
     ):
         api.include_router(r)
     # Aliases matching the documented endpoint groups.

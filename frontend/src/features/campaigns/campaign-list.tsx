@@ -9,14 +9,15 @@ import { PageHeader } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, Input, Progress, Select, Table, Td, Th } from "@/components/ui/primitives";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/states";
-import { useCampaigns, useMeta } from "@/hooks/queries";
+import { useCampaigns, useMeta, usePlatformAdmin } from "@/hooks/queries";
 import { useI18n } from "@/i18n/provider";
 import { formatDate, formatMoney } from "@/lib/utils";
 
 import { CampaignActions } from "./actions";
 
 export function CampaignList() {
-  const { t, locale, label } = useI18n();
+  const { t, locale, label, source } = useI18n();
+  const platformAdmin = usePlatformAdmin();
   const { data: meta } = useMeta();
   const industryName = (k: string) => {
     const i = meta?.industries.find((x) => x.key === k);
@@ -34,7 +35,7 @@ export function CampaignList() {
         subtitle={t.campaigns.subtitle}
         actions={
           <Button asChild variant="accent">
-            <Link href="/campaigns/new">
+            <Link href="/app/campaigns/new">
               <Plus /> {t.campaigns.new}
             </Link>
           </Button>
@@ -58,7 +59,7 @@ export function CampaignList() {
       ) : error ? (
         <ErrorState error={error} onRetry={() => refetch()} />
       ) : !data || data.items.length === 0 ? (
-        <EmptyState title={t.campaigns.noCampaigns} action={<Button asChild><Link href="/campaigns/new">{t.campaigns.new}</Link></Button>} />
+        <EmptyState title={t.campaigns.noCampaigns} action={<Button asChild><Link href="/app/campaigns/new">{t.campaigns.new}</Link></Button>} />
       ) : (
         <Card>
           <Table>
@@ -73,7 +74,7 @@ export function CampaignList() {
                 <Th className="text-end">{t.campaigns.discovered}</Th>
                 <Th className="text-end">{t.campaigns.qualified}</Th>
                 <Th className="w-36">{t.campaigns.progress}</Th>
-                <Th className="text-end">{t.campaigns.cost}</Th>
+                {platformAdmin ? <Th className="text-end">{t.campaigns.cost}</Th> : null}
                 <Th>{t.campaigns.created}</Th>
                 <Th><span className="sr-only">{t.common.actions}</span></Th>
               </tr>
@@ -82,18 +83,18 @@ export function CampaignList() {
               {data.items.map((c) => (
                 <tr key={c.id} className="border-b last:border-0 hover:bg-muted/40">
                   <Td>
-                    <Link href={`/campaigns/${c.id}`} className="font-medium hover:text-primary hover:underline">{c.name}</Link>
+                    <Link href={`/app/campaigns/${c.id}`} className="font-medium hover:text-primary hover:underline">{c.name}</Link>
                     {c.is_demo ? <div className="mt-1"><DemoBadge /></div> : null}
                   </Td>
                   <Td>{c.country}{c.city ? ` · ${c.city}` : ""}</Td>
                   <Td>{industryName(c.industry)}</Td>
-                  <Td className="text-xs text-muted-foreground">{c.sources.map((s) => label(s.provider_key)).join(locale === "ar" ? "، " : ", ")}</Td>
+                  <Td className="text-xs text-muted-foreground">{[...new Set(c.sources.map((s) => source(s.provider_key)))].join(locale === "ar" ? "، " : ", ")}</Td>
                   <Td><StatusBadge status={c.status} /></Td>
                   <Td className="text-end tabular-nums">{c.stats?.target ?? c.settings.target_count}</Td>
                   <Td className="text-end tabular-nums">{c.stats?.unique_leads ?? 0}</Td>
                   <Td className="text-end tabular-nums">{c.stats?.qualified ?? 0}</Td>
                   <Td><Progress value={c.status === "draft" ? 0 : c.stats?.progress?.percent ?? null} label={c.name} /></Td>
-                  <Td className="text-end tabular-nums">{formatMoney(c.cost_discovery + c.cost_ai)}</Td>
+                  {platformAdmin ? <Td className="text-end tabular-nums">{formatMoney(c.cost_discovery + c.cost_ai)}</Td> : null}
                   <Td className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(c.created_at, locale)}</Td>
                   <Td><CampaignActions c={c} compact /></Td>
                 </tr>

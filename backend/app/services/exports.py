@@ -10,10 +10,10 @@ from openpyxl.styles import Font, PatternFill
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Business, BusinessSource, Campaign, LeadAssessment, LeadNote
+from app.models import Business, BusinessSource, Campaign, LeadAssessment, LeadNote, WorkspaceProfile
 from app.models.enums import ContactType
-from app.research.catalog import SERVICES
 from app.services.leads import LeadFilters, best_contact, decorate, lead_query
+from app.services.profile import offering_map, offering_name
 
 COLUMNS = [
     "Company",
@@ -50,6 +50,9 @@ async def export_rows(db: AsyncSession, workspace_id: uuid.UUID, f: LeadFilters)
         )
     )
     decorated = await decorate(db, workspace_id, businesses)
+    offerings = offering_map(
+        await db.scalar(select(WorkspaceProfile).where(WorkspaceProfile.workspace_id == workspace_id))
+    )
     ids = [b.id for b in businesses]
     assessments: dict[uuid.UUID, LeadAssessment] = {}
     for a in await db.scalars(
@@ -76,7 +79,7 @@ async def export_rows(db: AsyncSession, workspace_id: uuid.UUID, f: LeadFilters)
         page = next((c for c in contacts if c.type == ContactType.CONTACT_PAGE), None)
         social = [c.value for c in contacts if c.type == ContactType.SOCIAL]
         a = assessments.get(b.id)
-        service = SERVICES.get(b.recommended_service or "", {}).get("en", b.recommended_service or "")
+        service = offering_name(offerings, b.recommended_service)
         rows.append(
             [
                 b.name,

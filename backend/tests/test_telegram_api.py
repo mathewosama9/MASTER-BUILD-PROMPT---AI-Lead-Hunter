@@ -113,5 +113,24 @@ async def test_bot_language_is_saved_and_used_for_notifications(app, client, db)
     )
     camp.stats = {"target": 5, "qualified": 3}
     assert await chat_locale(db, camp) == "ar"
-    text = completion_text(camp, "ar")
-    assert "اكتمل البحث" in text and "العملاء المؤهلون: 3" in text
+    camp.last_error = "Google Maps unavailable (rate_limited)"
+    text = completion_text(camp, "ar", credits_used=7, top=[("Bright <Smile>", 82.0)])
+    assert "البحث خلص" in text and "مناسبين: 3" in text and "الكريدت المستخدم: 7" in text
+    assert "Bright &lt;Smile&gt; — 82/100" in text  # HTML-escaped for parse_mode=HTML
+    # Customers never see provider names or USD costs.
+    assert "Google" not in text and "$" not in text
+
+
+async def test_link_code_includes_deep_link(client, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "@RasdBot")
+    get_settings.cache_clear()
+    try:
+        data = (await client.post("/api/v1/telegram/link-code")).json()
+        assert data["bot_username"] == "RasdBot"
+        assert data["deep_link"] == f"https://t.me/RasdBot?start={data['code']}"
+    finally:
+        monkeypatch.delenv("TELEGRAM_BOT_USERNAME")
+        get_settings.cache_clear()
+    assert (await client.post("/api/v1/telegram/link-code")).json()["deep_link"] is None

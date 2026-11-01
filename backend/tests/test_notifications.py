@@ -39,17 +39,21 @@ async def test_completion_notification_uses_real_counts(client, dispatched, monk
             )
             assert await run_latest(camp["id"]) == "completed"
         payloads = [json.loads(call.request.content) for call in route.calls]
-        final = [p for p in payloads if "Research completed" in p.get("text", "")]
+        final = [p for p in payloads if "Search completed" in p.get("text", "")]
         assert final, payloads
         detail = (await client.get(f"/api/v1/campaigns/{camp['id']}")).json()["stats"]
         text = final[-1]["text"]
+        assert final[-1]["parse_mode"] == "HTML"
         assert f"Target: {detail['target']}" in text
-        assert f"Businesses discovered: {detail['discovered']}" in text
-        assert f"Unique qualified leads: {detail['qualified']}" in text
-        assert f"Verified emails: {detail['verified_emails']}" in text
+        assert f"Found: {detail['unique_leads']}" in text
+        assert f"Qualified: {detail['qualified']}" in text
+        assert f"verified: {detail['verified_emails']}" in text
+        assert "Credits used" not in text  # demo searches are free
+        assert "Best leads" in text and "/100" in text
+        assert "$" not in text
         assert final[-1]["chat_id"] == 4242
         buttons = [b["text"] for row in final[-1]["reply_markup"]["inline_keyboard"] for b in row]
-        assert any("Export CSV" in b for b in buttons)
+        assert any("CSV" in b for b in buttons) and any("Best leads" in b for b in buttons)
     finally:
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN")
         get_settings.cache_clear()

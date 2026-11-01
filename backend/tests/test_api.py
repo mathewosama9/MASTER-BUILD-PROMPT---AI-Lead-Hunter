@@ -94,6 +94,46 @@ async def test_full_demo_campaign_flow(client, dispatched, db):
     assert {"discovery", "deduplication", "lead_scoring"} <= stages
 
 
+async def test_reanalyze_touches_one_lead_and_respects_campaign_state(client, dispatched, db):
+    from app.models import Campaign, LeadAssessment
+    from app.models.enums import CampaignStatus
+
+    camp = await create(client)
+    assert await run_latest(camp["id"]) == "completed"
+    cid = uuid.UUID(camp["id"])
+    leads = (await db.scalars(select(CampaignLead).where(CampaignLead.campaign_id == cid))).all()
+    target, other = leads[0], leads[1]
+    # Another lead left pending (e.g. a paused run) must not be analysed by a single-lead request.
+    other.analyzed = other.scored = False
+    await db.commit()
+
+    async def assessments(business_id):
+        q = select(LeadAssessment.id).where(LeadAssessment.business_id == business_id)
+        return len((await db.scalars(q)).all())
+
+    before_target, before_other = await assessments(target.business_id), await assessments(other.business_id)
+    r = await client.post(f"/api/v1/leads/{target.business_id}/reanalyze")
+    assert r.status_code == 200, r.text
+    assert await assessments(target.business_id) == before_target + 1
+    assert await assessments(other.business_id) == before_other
+    await db.refresh(other)
+    assert not other.analyzed
+
+    campaign = await db.get(Campaign, cid)
+    for status in (CampaignStatus.ENRICHING, CampaignStatus.CANCELLED):
+        campaign.status = status
+        await db.commit()
+        assert (await client.post(f"/api/v1/leads/{target.business_id}/reanalyze")).status_code == 409
+
+    # The campaign budget still applies.
+    campaign.status = CampaignStatus.COMPLETED
+    campaign.settings = {**campaign.settings, "max_budget_usd": 0}
+    await db.commit()
+    r = await client.post(f"/api/v1/leads/{target.business_id}/reanalyze")
+    assert r.status_code == 409 and "budget" in r.text
+    assert await assessments(target.business_id) == before_target + 1
+
+
 async def test_businesses_without_contacts_are_kept(client, dispatched, db):
     camp = await create(client, {**DEMO, "settings": {**DEMO["settings"], "max_companies": 30, "target_count": 30}})
     await run_latest(camp["id"])
@@ -297,7 +337,44 @@ async def test_viewer_cannot_mutate(app, owner, db, dispatched):
     await c.aclose()
 
 
-async def test_provider_credentials_are_never_returned(client):
+async def test_admin_cannot_modify_an_owner(app, owner, db):
+    admin, _ = await make_user(db, role=Role.ADMIN, workspace=owner[1])
+    member, _ = await make_user(db, role=Role.ANALYST, workspace=owner[1])
+    c = await login(app, admin.email)
+    target = f"/api/v1/users/{owner[0].id}"
+    for body in ({"is_active": False}, {"full_name": "Hijacked"}, {"role": "analyst"}):
+        assert (await c.patch(target, json=body)).status_code == 409, body
+    assert (await c.patch(f"/api/v1/users/{member.id}", json={"role": "owner"})).status_code == 409
+    # Admins still manage non-owners.
+    r = await c.patch(f"/api/v1/users/{member.id}", json={"full_name": "Renamed", "is_active": False})
+    assert r.status_code == 200 and r.json()["user"]["full_name"] == "Renamed"
+    await c.aclose()
+    await db.refresh(owner[0])
+    assert owner[0].is_active and owner[0].full_name == "Test User"
+    # The owner can still edit themselves.
+    o = await login(app, owner[0].email)
+    assert (await o.patch(target, json={"full_name": "Owner"})).status_code == 200
+    await o.aclose()
+
+
+async def test_customers_cannot_manage_provider_keys_or_see_them(client):
+    assert (await client.put("/api/v1/providers/brave", json={"credentials": {"api_key": "x" * 20}})).status_code == 403
+    assert (await client.get("/api/v1/providers/sessions")).status_code == 403
+    brave = next(p for p in (await client.get("/api/v1/providers")).json() if p["key"] == "brave")
+    assert brave["credentials_masked"] == {} and brave["usage_month"]["cost_usd"] == 0.0
+
+
+async def test_platform_keys_apply_to_every_workspace(app, db, client, platform_admin):
+    r = await client.put("/api/v1/providers/brave", json={"credentials": {"api_key": "platform-brave-key-5678"}})
+    assert r.status_code == 200 and r.json()["credential_source"] == "platform"
+    customer, _ = await make_user(db)
+    c = await login(app, customer.email)
+    brave = next(p for p in (await c.get("/api/v1/providers")).json() if p["key"] == "brave")
+    await c.aclose()
+    assert brave["status"] == "connected" and brave["credentials_masked"] == {}
+
+
+async def test_provider_credentials_are_never_returned(client, platform_admin):
     r = await client.put("/api/v1/providers/brave", json={"credentials": {"api_key": "super-secret-brave-key-1234"}})
     assert r.status_code == 200
     body = (await client.get("/api/v1/providers")).text

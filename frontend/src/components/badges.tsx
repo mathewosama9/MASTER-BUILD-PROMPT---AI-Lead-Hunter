@@ -83,7 +83,7 @@ export function DemoBadge() {
 
 export function ScorePill({ score }: { score: number | null }) {
   if (score === null || score === undefined) return <span className="text-muted-foreground">—</span>;
-  const tone = score >= 70 ? "bg-sun-500 text-navy-900" : score >= 50 ? "bg-brand-500 text-white" : "bg-muted text-muted-foreground";
+  const tone = score >= 70 ? "bg-signal-400 text-ink-900" : score >= 50 ? "bg-rasd-500 text-white" : "bg-muted text-muted-foreground";
   return (
     <span className={`inline-flex min-w-10 justify-center rounded-md px-1.5 py-0.5 text-xs font-semibold tabular-nums ${tone}`}>
       {Math.round(score)}

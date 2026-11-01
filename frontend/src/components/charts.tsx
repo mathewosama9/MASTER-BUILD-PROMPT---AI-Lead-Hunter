@@ -17,29 +17,29 @@ import {
 import { useI18n } from "@/i18n/provider";
 
 /*
- * Chart colour rules (validated with the dataviz palette script):
- * - Every chart here is a single series -> one brand blue; no legend, the card title names the series.
- * - Blue #1D79FF passes 3:1 on the light surface, #4E94FF on the dark surface.
- * - Brand yellow fails 3:1 on light surfaces, so it is never used as a data mark.
- * - Histogram buckets use a sequential blue ramp (light -> dark = low -> high score).
+ * Chart colour rules (Rasd brand):
+ * - Every chart here is a single series -> one brand green; no legend, the card title names the series.
+ * - Rasd 600 #0B8A63 passes 3:1 on the light surface, Rasd 400 #3CC594 on the dark surface.
+ * - Signal lime fails 3:1 on light surfaces, so it is never used as a data mark there.
+ * - Histogram buckets use a sequential green ramp (light -> dark = low -> high score).
  */
-const SERIES = { light: "#1D79FF", dark: "#4E94FF" };
+const SERIES = { light: "#0B8A63", dark: "#3CC594" };
 const RAMP = {
-  light: ["#99C2FF", "#6FA8FF", "#4E94FF", "#1D79FF", "#0049B2"],
-  dark: ["#25275F", "#2E4C99", "#1D79FF", "#4E94FF", "#99C2FF"],
+  light: ["#B2EBD3", "#7FDCB6", "#3CC594", "#0B8A63", "#05553D"],
+  dark: ["#16362F", "#24483F", "#0B8A63", "#3CC594", "#B2EBD3"],
 };
 
 function usePalette() {
   const { resolvedTheme } = useTheme();
-  const mode: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
+  const mode: "light" | "dark" = resolvedTheme === "dark" ? "dark" : "light";
   return {
     series: SERIES[mode],
     ramp: RAMP[mode],
-    grid: mode === "dark" ? "#25275F" : "#E3E4F3",
-    axis: mode === "dark" ? "#9A9CC9" : "#4B4D83",
-    tooltipBg: mode === "dark" ? "#0E0F31" : "#FFFFFF",
-    tooltipBorder: mode === "dark" ? "#25275F" : "#D9DBEF",
-    text: mode === "dark" ? "#F2F3FF" : "#0E0F31",
+    grid: mode === "dark" ? "#1A3A32" : "#E2E3DA",
+    axis: mode === "dark" ? "#A9C2B9" : "#4B5F58",
+    tooltipBg: mode === "dark" ? "#0A1F1A" : "#FFFFFF",
+    tooltipBorder: mode === "dark" ? "#1A3A32" : "#E2E3DA",
+    text: mode === "dark" ? "#EEF5F1" : "#071A17",
   };
 }
 

@@ -4,11 +4,13 @@ from app.core.config import get_settings
 from app.research.providers.base import DiscoveryProvider, ProviderInfo
 from app.research.providers.brave import BraveSearchProvider
 from app.research.providers.demo import DemoProvider
+from app.research.providers.directories import DirectoryProvider
 from app.research.providers.google_maps import GoogleMapsProvider
 from app.research.providers.hunter import HunterDiscoverProvider
 from app.research.providers.imported import ImportProvider
 from app.research.providers.osm import OsmProvider
 from app.research.providers.social import FacebookProvider, ManualProvider, XProvider
+from app.research.providers.social_discovery import SocialDiscoveryProvider
 
 _DISCOVERY: dict[str, DiscoveryProvider] = {}
 
@@ -32,6 +34,8 @@ for _p in (
     OsmProvider(),
     GoogleMapsProvider(),
     BraveSearchProvider(),
+    DirectoryProvider(),
+    SocialDiscoveryProvider(),
     HunterDiscoverProvider(),
     XProvider(),
     FacebookProvider(),
@@ -59,6 +63,22 @@ INTEGRATIONS: dict[str, ProviderInfo] = {
         "AI analysis, pitches and NL targeting via the DeepSeek API (JSON output validated against the schema).",
         ["api_key"],
         "https://api-docs.deepseek.com",
+    ),
+    "apollo": ProviderInfo(
+        "apollo",
+        "Apollo.io",
+        "enrichment",
+        "Paid people finder: the decision maker's direct email/phone when free sources found none.",
+        ["api_key"],
+        "https://docs.apollo.io",
+    ),
+    "lusha": ProviderInfo(
+        "lusha",
+        "Lusha",
+        "enrichment",
+        "Paid people finder strong on direct mobile numbers; used after Hunter and Apollo by default.",
+        ["api_key"],
+        "https://docs.lusha.com",
     ),
     "firecrawl": ProviderInfo(
         "firecrawl",
@@ -89,6 +109,8 @@ INTEGRATIONS: dict[str, ProviderInfo] = {
 ENV_CREDENTIALS: dict[str, dict[str, str]] = {
     "brave": {"api_key": "brave_api_key"},
     "hunter": {"api_key": "hunter_api_key"},
+    "apollo": {"api_key": "apollo_api_key"},
+    "lusha": {"api_key": "lusha_api_key"},
     "x": {"bearer_token": "x_bearer_token"},
     "facebook": {"access_token": "facebook_access_token"},
     "anthropic": {"api_key": "anthropic_api_key"},
@@ -102,7 +124,16 @@ ENV_CREDENTIALS: dict[str, dict[str, str]] = {
 }
 
 
+# Sources that run on another provider's key (both discovery sources below search through Brave).
+CREDENTIAL_ALIASES: dict[str, str] = {"directories": "brave", "social_discovery": "brave"}
+
+
+def credential_key(key: str) -> str:
+    return CREDENTIAL_ALIASES.get(key, key)
+
+
 def env_credentials(key: str) -> dict[str, str]:
+    key = credential_key(key)
     settings = get_settings()
     out: dict[str, str] = {}
     for field, attr in ENV_CREDENTIALS.get(key, {}).items():

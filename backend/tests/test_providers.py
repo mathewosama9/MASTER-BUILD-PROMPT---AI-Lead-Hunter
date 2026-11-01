@@ -182,3 +182,27 @@ def test_heuristic_reports_unknowns_instead_of_claiming_absence():
 
 def test_ai_service_unavailable_without_keys():
     assert not AIService({}).available
+
+
+async def test_monthly_usage_counts_ai_analyses_and_pitches(db, owner):
+    from app.models import Business, LeadAssessment, OutreachDraft
+    from app.services import providers as svc
+
+    ws = owner[1].id
+    biz = Business(workspace_id=ws, name="Smile", normalized_name="smile")
+    db.add(biz)
+    await db.flush()
+    db.add_all(
+        [
+            LeadAssessment(business_id=biz.id, provider="deepseek", cost_usd=0.004),
+            LeadAssessment(business_id=biz.id, provider="deepseek", cost_usd=0.006),
+            OutreachDraft(
+                business_id=biz.id, language="ar", tone="friendly", length="short", provider="deepseek", cost_usd=0.002
+            ),
+        ]
+    )
+    svc_ctx = await svc.build_context(db, ws, "brave")
+    await svc_ctx.record_usage("deepseek", "decision_makers", 1, 0.001, True, 200)
+    await db.flush()
+    usage = await svc.monthly_usage(db, ws)
+    assert usage["deepseek"] == {"requests": 4, "cost_usd": 0.013}

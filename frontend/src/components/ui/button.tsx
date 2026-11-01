@@ -10,7 +10,8 @@ export const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
-        accent: "bg-accent text-accent-foreground shadow-sm hover:bg-sun-400",
+        accent: "bg-accent text-accent-foreground shadow-sm ring-1 ring-inset ring-ink-900/10 hover:bg-signal-300",
+        ink: "bg-ink-900 text-paper shadow-sm hover:bg-ink-800 dark:bg-paper dark:text-ink-900 dark:hover:bg-paper/90",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         outline: "border border-border bg-card hover:bg-muted",
         ghost: "hover:bg-muted",
@@ -21,6 +22,7 @@ export const buttonVariants = cva(
         default: "h-9 px-4 py-2",
         sm: "h-8 rounded-md px-3 text-xs",
         lg: "h-10 rounded-md px-6",
+        xl: "h-12 rounded-xl px-7 text-base",
         icon: "size-9",
       },
     },

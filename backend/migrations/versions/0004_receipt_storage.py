@@ -1,0 +1,26 @@
+"""store top-up receipts in the database
+
+Revision ID: 0004
+Revises: 0003
+Create Date: 2026-10-30 14:00:00.000000
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "0004"
+down_revision: str | None = "0003"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.alter_column("topup_requests", "receipt_path", new_column_name="receipt_filename")
+    op.add_column("topup_requests", sa.Column("receipt_data", sa.LargeBinary(), nullable=True))
+
+
+def downgrade() -> None:
+    op.drop_column("topup_requests", "receipt_data")
+    op.alter_column("topup_requests", "receipt_filename", new_column_name="receipt_path")

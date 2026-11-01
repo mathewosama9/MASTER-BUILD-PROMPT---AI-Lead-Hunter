@@ -340,7 +340,9 @@ def test_parse_public_social_profiles():
 
 def test_tiktok_string_counters_do_not_break_summary():
     # Some TikTok page variants send counters as strings; this used to crash the whole enrichment run.
-    page = TT.replace('"followerCount":2200', '"followerCount":"12.5K"').replace('"heartCount":51000', '"heartCount":"51000"')
+    page = TT.replace('"followerCount":2200', '"followerCount":"12.5K"').replace(
+        '"heartCount":51000', '"heartCount":"51000"'
+    )
     tt = parse_social_profile("tiktok", "https://www.tiktok.com/@smile", page)
     assert (tt.followers, tt.likes) == (12500, 51000)
     assert "12,500 followers" in tt.summary()
@@ -565,7 +567,9 @@ def test_linkedin_company_page_parsing():
     assert not gone.accessible and "unavailable" in gone.summary()
 
 
-async def test_sessions_api_and_pipeline_use_with_expiry(client, dispatched, db, monkeypatch, scraping_on):
+async def test_sessions_api_and_pipeline_use_with_expiry(
+    client, platform_admin, dispatched, db, monkeypatch, scraping_on
+):
     from app.core import safe_http
 
     async def no_dns(self, url):
@@ -636,29 +640,95 @@ async def _true():
     return True
 
 
-async def test_dashboard_login_flow_saves_only_logged_in_cookies(client, monkeypatch):
-    calls: list[tuple[str, dict | None]] = []
-    captured = {"state": {"cookies": [{"name": "bcookie", "domain": ".linkedin.com"}], "origins": []}}
+class FakeLoginBrowser:
+    """Stands in for the login-browser service, including its check of the opaque login id."""
 
-    async def fake_login_browser(path, body=None):
-        calls.append((path, body))
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict | None]] = []
+        self.login_id: str | None = None
+        self.platform: str | None = None
+        self.state = {"cookies": [{"name": "bcookie", "domain": ".linkedin.com"}], "origins": []}
+
+    async def __call__(self, path, body=None):
+        from app.core.errors import AppError
+
+        self.calls.append((path, body))
         if path == "/start":
+            self.login_id, self.platform = body["login_id"], body["platform"]
             return {"platform": body["platform"], "vnc_password": "abc12345"}
+        if body is None or body.get("login_id") != self.login_id:
+            raise AppError("Login browser: this login was replaced or has ended", status_code=409)
         if path == "/capture":
-            return {"platform": "linkedin", "storage_state": captured["state"]}
+            return {"platform": self.platform, "storage_state": self.state}
+        self.login_id = self.platform = None
         return {"status": "cancelled"}
 
-    monkeypatch.setattr("app.api.v1.providers._login_browser", fake_login_browser)
+
+@pytest.fixture
+async def login_browser(monkeypatch):
+    from app.api.v1.providers import LOGIN_OWNER_KEY
+    from app.core.redis import async_redis
+
+    async def clear():
+        r = async_redis()
+        await r.delete(LOGIN_OWNER_KEY)
+        await r.aclose()
+
+    await clear()
+    fake = FakeLoginBrowser()
+    monkeypatch.setattr("app.api.v1.providers._login_browser", fake)
+    yield fake
+    await clear()
+
+
+async def test_dashboard_login_flow_saves_only_logged_in_cookies(client, platform_admin, login_browser):
+    calls = login_browser.calls
     r = await client.post("/api/v1/providers/sessions/linkedin/login/start")
     assert r.status_code == 200
     assert r.json()["viewer_url"].endswith("password=abc12345") and "autoconnect=1" in r.json()["viewer_url"]
     # Anonymous cookies only (no li_at): refused, so a half-finished login is never saved as "connected".
     r = await client.post("/api/v1/providers/sessions/linkedin/login/finish")
     assert r.status_code == 400 and "Not logged in" in r.text
-    captured["state"]["cookies"].append({"name": "li_at", "value": "tok", "domain": ".linkedin.com"})
+    assert (await client.post("/api/v1/providers/sessions/tiktok/login/finish")).status_code == 409  # wrong platform
+    login_browser.state["cookies"].append({"name": "li_at", "value": "tok", "domain": ".linkedin.com"})
     r = await client.post("/api/v1/providers/sessions/linkedin/login/finish")
     assert r.status_code == 200 and r.json()["status"] == "connected"
-    assert (await client.post("/api/v1/providers/sessions/tiktok/login/finish")).status_code == 409  # wrong platform
-    assert (await client.post("/api/v1/providers/sessions/linkedin/login/cancel")).status_code == 200
+    # A successful save closed the login and released it.
+    assert (await client.post("/api/v1/providers/sessions/linkedin/login/cancel")).status_code == 409
     # Refused save keeps the window open; a successful save closes it.
-    assert [c[0] for c in calls] == ["/start", "/capture", "/capture", "/cancel", "/capture", "/cancel"]
+    assert [c[0] for c in calls] == ["/start", "/capture", "/capture", "/cancel"]
+    assert len({c[1]["login_id"] for c in calls}) == 1
+
+
+async def test_login_browser_is_bound_to_the_user_who_started_it(app, client, db, platform_admin, login_browser):
+    from app.models.enums import Role
+    from tests.conftest import login, make_user
+
+    owner = platform_admin
+    other_user, _ = await make_user(db)  # another platform admin, in another workspace
+    teammate, _ = await make_user(db, role=Role.ADMIN, workspace=owner[1])  # same workspace, different user
+    other_user.is_superuser = teammate.is_superuser = True
+    await db.commit()
+    other = await login(app, other_user.email)
+    mate = await login(app, teammate.email)
+    try:
+        assert (await client.post("/api/v1/providers/sessions/linkedin/login/start")).status_code == 200
+        login_browser.state["cookies"].append({"name": "li_at", "value": "victim", "domain": ".linkedin.com"})
+
+        # Someone else can neither capture the victim's cookies, close the login, nor take the browser over.
+        for c in (other, mate):
+            assert (await c.post("/api/v1/providers/sessions/linkedin/login/finish")).status_code == 403
+            assert (await c.post("/api/v1/providers/sessions/linkedin/login/cancel")).status_code == 403
+            assert (await c.post("/api/v1/providers/sessions/tiktok/login/start")).status_code == 409
+        listing = (await other.get("/api/v1/providers/sessions")).json()
+        assert next(x for x in listing if x["platform"] == "linkedin")["status"] == "not_connected"
+        assert [c[0] for c in login_browser.calls] == ["/start"]
+
+        # The owner of the login can still finish it.
+        r = await client.post("/api/v1/providers/sessions/linkedin/login/finish")
+        assert r.status_code == 200 and r.json()["status"] == "connected"
+        # Once released, the browser is free for the next user.
+        assert (await other.post("/api/v1/providers/sessions/tiktok/login/start")).status_code == 200
+    finally:
+        await other.aclose()
+        await mate.aclose()

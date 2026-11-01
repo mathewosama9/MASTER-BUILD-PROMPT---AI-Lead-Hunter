@@ -2,6 +2,7 @@
 
 python -m app.cli create-admin --email admin@example.com --password '...' --workspace "My Agency"
 python -m app.cli run-demo --email admin@example.com          # runs a full demo campaign inline
+python -m app.cli set-superuser --email you@example.com [--revoke]   # platform admin (/app/admin)
 """
 
 import asyncio
@@ -94,6 +95,21 @@ async def _run_demo(email: str, target: int) -> None:
 @cli.command("run-demo")
 def run_demo(email: str = typer.Option(...), target: int = typer.Option(15)) -> None:
     asyncio.run(_run_demo(email, target))
+
+
+async def _set_superuser(email: str, value: bool) -> None:
+    async with worker_session() as db:
+        user = await db.scalar(select(User).where(func.lower(User.email) == email.lower()))
+        if user is None:
+            raise typer.BadParameter(f"Unknown user {email}")
+        user.is_superuser = value
+        await db.commit()
+        typer.echo(f"{email}: platform admin {'granted' if value else 'revoked'}")
+
+
+@cli.command("set-superuser")
+def set_superuser(email: str = typer.Option(...), revoke: bool = typer.Option(False, "--revoke")) -> None:
+    asyncio.run(_set_superuser(email, not revoke))
 
 
 if __name__ == "__main__":
