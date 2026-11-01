@@ -25,6 +25,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.redis import async_redis
 from app.models import (
     Business,
     BusinessContact,
@@ -45,20 +46,23 @@ from app.research import geo
 from app.research.analysis.ai_service import AI_PROVIDERS, AIRefused, AIService, AIUnavailable
 from app.research.analysis.heuristic import heuristic_analysis
 from app.research.analysis.schemas import BusinessAnalysis
-from app.research.catalog import decision_roles
+from app.research.analysis.web_ai import COUNCIL, ask_council, dump_answers, load_answers, to_candidates
+from app.research.catalog import decision_roles, industry_label, industry_terms, place_names
 from app.research.enrichment import people_finders
-from app.research.enrichment.contacts import ContactFinding, classify_email, social_profile_url
+from app.research.enrichment.contacts import ContactFinding, classify_email, is_junk_email, social_profile_url
 from app.research.enrichment.decision_makers import (
     DecisionMaker,
     attach_known_emails,
     extract_with_ai,
     from_text,
     merge,
+    role_rank,
     search_linkedin,
     search_person_profiles,
 )
 from app.research.enrichment.dedupe import dedupe_candidates, find_existing_business
 from app.research.enrichment.email_check import domain_accepts_mail
+from app.research.enrichment.location import judge_location, place_names_for
 from app.research.enrichment.normalize import (
     business_domain,
     homepage_url,
@@ -66,16 +70,19 @@ from app.research.enrichment.normalize import (
     normalize_name,
     normalize_phone,
 )
+from app.research.enrichment.relevance import is_closed, judge_industry, listing_points
 from app.research.enrichment.social_profiles import SUPPORTED as SOCIAL_PLATFORMS
 from app.research.enrichment.social_profiles import contacts_in_bio, fetch_profile, platform_of
 from app.research.enrichment.social_search import (
     NAME_ONLY_NOTE,
     SEARCH_PLATFORMS,
+    STRONG_CONFIDENCE,
     SearchBlocked,
     best_match,
     build_query,
     web_search,
 )
+from app.research.enrichment.verify_people import BusinessIdentity, Verdict, known_proofs, verify_people
 from app.research.enrichment.website import WebsiteResearch, research_website
 from app.research.providers.base import (
     BusinessCandidate,
@@ -113,7 +120,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "max_runtime_minutes": 30,
     "concurrency": 4,
     "exclude_duplicates": False,
+    # Relevance gate (enrichment/relevance.py): drop closed places, places far from the city and other kinds of
+    # business before anything is spent on them.
+    "relevance_check": True,
 }
+# Lists the user supplied themselves: kept wherever the businesses are.
+USER_SOURCES = {"manual", "import", "demo"}
 
 MAX_PROVIDER_ATTEMPTS = 3
 # Hygiene signals that say little about a service opportunity; excluded from evidence strength.
@@ -130,6 +142,44 @@ def _identifiers(group: Any, phone: str | None) -> dict[str, str]:
     if phone:
         out["phone"] = phone
     return out
+
+
+def _sources_of(contact: BusinessContact) -> list[str]:
+    return list((contact.evidence or {}).get("sources") or [contact.source_provider])
+
+
+def _source_family(provider: str) -> str:
+    """Values seen twice by one source family (the site's pages, or one engine's results) are not corroborated."""
+    p = (provider or "").split("+")[0]
+    if p in ("website", "structured_data", "manual", "imported"):
+        return "website"
+    if p in ("social_search", "social_profile", "person_search", "instagram", "facebook", "tiktok", "x", "snapchat"):
+        return "social"
+    return p
+
+
+async def _cache_get(key: str) -> list | None:
+    """Cached research-council answers, or None (missing, expired or no Redis)."""
+    try:
+        r = async_redis()
+        try:
+            raw = await r.get(key)
+        finally:
+            await r.aclose()
+    except Exception:  # noqa: BLE001 - no cache: ask again
+        return None
+    return load_answers(raw) if raw else None
+
+
+async def _cache_set(key: str, value: str, ttl: int) -> None:
+    try:
+        r = async_redis()
+        try:
+            await r.set(key, value, ex=ttl)
+        finally:
+            await r.aclose()
+    except Exception:  # noqa: BLE001, S110 - caching is best effort
+        pass
 
 
 class StopRun(Exception):
@@ -157,6 +207,7 @@ class CampaignPipeline:
         page_source: PageSource | None = None,
         search_transport: httpx.AsyncBaseTransport | None = None,
         finder_transport: httpx.AsyncBaseTransport | None = None,
+        council_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.db = db
         self.finder_transport = finder_transport  # paid people finders (Hunter/Apollo/Lusha); tests mock it
@@ -175,6 +226,12 @@ class CampaignPipeline:
         self._finder_off: set[str] = set()  # finders that failed for an account reason during this run
         self._person_search_blocked = False
         self._direct_found = 0  # decision makers delivered with a direct email/phone
+        self._people_rejected = 0  # candidates turned down by verification (not delivered)
+        self._out_of_place: dict[str, int] = {}  # leads removed by the location rule: outside / unknown
+        self._council: dict[str, str] | None = None  # connected research-council models -> key
+        self._council_off: set[str] = set()
+        self._council_blocked = False
+        self.council_transport = council_transport  # tests mock the research-council APIs
         self._place: geo.Place | None = None  # where this campaign searches from (see geo.py)
         self.campaign = campaign
         self.run = run
@@ -697,6 +754,7 @@ class CampaignPipeline:
     async def stage_persist_candidates(self, candidates: list[BusinessCandidate]) -> None:
         await self._set_status(CampaignStatus.DISCOVERING, Stage.NORMALIZATION)
         groups, removed_in_batch = dedupe_candidates(candidates)
+        groups = await self._relevance_gate(groups)
         await self._complete_stage(Stage.NORMALIZATION)
         await self._set_status(CampaignStatus.DISCOVERING, Stage.DEDUPLICATION)
         removed = removed_in_batch
@@ -712,8 +770,8 @@ class CampaignPipeline:
             if c.is_demo != self.campaign.is_demo:
                 continue
             business = None
-            if not group.key.startswith("unkeyed:"):
-                business = await find_existing_business(self.db, ws, group.key)
+            if group.keys:
+                business = await find_existing_business(self.db, ws, group.keys, group.domain)
             pre_existing = business is not None
             if business is not None:
                 already_linked = await self.db.scalar(
@@ -729,15 +787,14 @@ class CampaignPipeline:
                     removed += 1
                     continue
             if business is None:
-                domain = business_domain(c.website_url)
-                phone = normalize_phone(c.phone, c.country) if c.phone else None
+                website = group.website_url
                 business = Business(
                     workspace_id=ws,
                     name=c.name,
                     normalized_name=normalize_name(c.name) or c.name.lower(),
-                    website_url=c.website_url,
-                    normalized_domain=domain,
-                    identifiers=_identifiers(group, phone if not domain else None),
+                    website_url=website,
+                    normalized_domain=business_domain(website),
+                    identifiers=_identifiers(group, group.phone),
                     industry=c.industry,
                     country=c.country,
                     city=c.city,
@@ -750,7 +807,9 @@ class CampaignPipeline:
                 await self.db.flush()
             else:
                 business.description = business.description or c.description
-                merged = {**_identifiers(group, None), **(business.identifiers or {})}
+                if group.domain and not business.normalized_domain:  # found by phone; now we know its site
+                    business.website_url, business.normalized_domain = group.website_url, group.domain
+                merged = {**_identifiers(group, group.phone), **(business.identifiers or {})}
                 if merged != (business.identifiers or {}):
                     business.identifiers = merged
             if not c.is_demo:
@@ -805,6 +864,133 @@ class CampaignPipeline:
         )
         await self._complete_stage(Stage.DEDUPLICATION)
         await self.push_progress(force=True)
+
+    async def _relevance_gate(self, groups: list[Any]) -> list[Any]:
+        """Keep only businesses the campaign asked for: open, in the city, and of the target kind (see
+        enrichment/relevance.py). Nothing is dropped when the check cannot run (demo, no AI for the industry)."""
+        if self.campaign.is_demo or not self.settings.get("relevance_check", True) or not groups:
+            return groups
+        if self._place is None:
+            self._place = await geo.locate(self.campaign.country, self.campaign.city, self.campaign.region)
+        dropped: dict[str, int] = {"closed": 0, "far": 0, "industry": 0}
+        kept = []
+        for g in groups:
+            if is_closed(g.all):
+                dropped["closed"] += 1
+            elif self._location_matters({c.source_provider for c in g.all}) and (
+                self._judge_listing(g.all).status == "outside"
+            ):
+                dropped["far"] += 1  # unknown ones stay until their website is read
+            else:
+                kept.append(g)
+        ai = await self._people_ai() if self.campaign.industry and kept else None
+        if ai is not None:
+            terms_en, terms_ar = industry_terms(self.campaign.industry)
+            place_en, _ = place_names(self.campaign.country, self.campaign.city, self.campaign.region)
+            try:
+                verdicts, cost = await judge_industry(
+                    ai, [g.all for g in kept], industry_label(self.campaign.industry), [*terms_en, *terms_ar], place_en
+                )
+                self._record_usage(ai.provider or "ai", "relevance", cost)
+                dropped["industry"] = sum(1 for v in verdicts.values() if v == "mismatch")
+                kept = [g for i, g in enumerate(kept) if verdicts.get(i) != "mismatch"]
+            except Exception as exc:  # noqa: BLE001 - without a verdict every business is kept
+                log.info("relevance check failed", extra={"error": str(exc)[:200]})
+        total = sum(dropped.values())
+        if total:
+            await self.event(
+                Stage.NORMALIZATION,
+                "relevance_filtered",
+                f"{total} businesses dropped as not matching the request "
+                f"({dropped['industry']} other kind of business, {dropped['far']} outside the city, "
+                f"{dropped['closed']} closed)",
+                data=dropped,
+                t="relevance_filtered",
+                p={"total": total, **dropped},
+            )
+        return kept
+
+    # ------------------------------------------------------------------ location (enrichment/location.py)
+
+    def _location_matters(self, providers: set[str]) -> bool:
+        """Only discovered businesses of a campaign aimed at a city/governorate are checked; lists the user
+        supplied (manual URLs, imports) and demo runs are kept as they are."""
+        return (
+            not self.campaign.is_demo
+            and bool(self.campaign.city or self.campaign.region)
+            and not providers <= USER_SOURCES
+        )
+
+    def _place_names(self):  # noqa: ANN202
+        return place_names_for(self.campaign.country, self.campaign.city, self.campaign.region)
+
+    def _judge_listing(self, items: list[BusinessCandidate]):  # noqa: ANN202
+        texts = [(t, c.source_provider) for c in items for t in (c.address, c.description, c.source_title, c.name)]
+        return judge_location(self._place, self._place_names(), points=listing_points(items), texts=texts)
+
+    async def _location_verdict(self, business: Business, res: WebsiteResearch | None):  # noqa: ANN202
+        """Where the business is, from every source we hold after enrichment: listing points, the site's map
+        coordinates and address, contact page, social bios and search snippets; the written address is placed
+        on the map when nothing else decides."""
+        sources = (
+            await self.db.execute(
+                select(
+                    BusinessSource.provider_key, BusinessSource.raw, BusinessSource.snippet, BusinessSource.title
+                ).where(BusinessSource.business_id == business.id)
+            )
+        ).all()
+        points: list[tuple[float, float, str]] = []
+        texts: list[tuple[str, str]] = []
+        for provider, raw, snippet, title in sources:
+            raw = raw or {}
+            lat, lon = raw.get("lat"), raw.get("lng", raw.get("lon"))
+            try:
+                if lat is not None and lon is not None:
+                    points.append((float(lat), float(lon), provider))
+            except (TypeError, ValueError):
+                pass
+            texts += [(snippet or "", provider), (title or "", provider)]
+        if res is not None:
+            points += [(lat, lon, "website map") for lat, lon in res.coordinates]
+            texts.append((res.address or "", "website address"))
+            texts += [(p.excerpt, "contact page") for p in res.pages if p.kind == "contact"]
+        texts.append((business.address or "", "listing address"))
+        bios = await self.db.scalars(
+            select(BusinessEvidence.excerpt).where(
+                BusinessEvidence.business_id == business.id, BusinessEvidence.kind == "social_profile"
+            )
+        )
+        texts += [(b or "", "social bio") for b in bios]
+        texts.append((business.name, "business name"))
+        verdict = judge_location(self._place, self._place_names(), points=points, texts=texts)
+        if verdict.status == "unknown" and self._place is not None and self._place.exact:
+            for address in dict.fromkeys(a for a in (res.address if res else None, business.address) if a):
+                point = await geo.geocode_address(self.campaign.country, address)
+                if point is not None:
+                    verdict = judge_location(
+                        self._place, self._place_names(), points=[(point[0], point[1], "address on the map")]
+                    )
+                    break
+        return verdict
+
+    async def _keep_in_place(self, lead: CampaignLead, business: Business, res: WebsiteResearch | None) -> bool:
+        """Strict location rule: a discovered business stays only with evidence that it is in the campaign's
+        place. Otherwise it leaves the campaign before decision makers are searched and before any credit is
+        charged (a business this campaign created is removed from the workspace too)."""
+        if not self._location_matters({lead.discovered_via}):
+            return True
+        verdict = await self._location_verdict(business, res)
+        strict = self._place is not None and self._place.exact  # the place itself was located
+        if verdict.status == "inside" or (verdict.status == "unknown" and not strict):
+            if verdict.status == "inside" and self.campaign.city:
+                business.city = self.campaign.city
+            return True
+        self._out_of_place[verdict.status] = self._out_of_place.get(verdict.status, 0) + 1
+        if not lead.pre_existing:
+            business.deleted_at = datetime.now(UTC)
+        await self.db.delete(lead)
+        await self.db.flush()
+        return False
 
     async def _save_listing_contacts(self, business: Business, items: list[BusinessCandidate]) -> None:
         """Phone/email/social links published on the source listing itself (Maps, OSM, imported rows)."""
@@ -972,6 +1158,26 @@ class CampaignPipeline:
                 t="decision_makers_done",
                 p={"count": self._people_found, "direct": self._direct_found},
             )
+        if self._out_of_place:
+            outside, unknown = self._out_of_place.get("outside", 0), self._out_of_place.get("unknown", 0)
+            await self.event(
+                Stage.COMPANY_ENRICHMENT,
+                "location_filtered",
+                f"{outside + unknown} businesses removed: {outside} outside the requested place, {unknown} with no "
+                "evidence of being there",
+                data=self._out_of_place,
+                t="location_filtered",
+                p={"total": outside + unknown, "outside": outside, "unknown": unknown},
+            )
+        if self._people_rejected:
+            await self.event(
+                Stage.CONTACT_ENRICHMENT,
+                "decision_makers_rejected",
+                f"{self._people_rejected} possible decision makers were not delivered because they could not be "
+                "verified",
+                t="decision_makers_rejected",
+                p={"count": self._people_rejected},
+            )
         if self._search_found:
             await self.event(
                 Stage.CONTACT_ENRICHMENT,
@@ -1065,6 +1271,8 @@ class CampaignPipeline:
                             await self._save_research(business, await self._research(business, transport), sets)
                         except Exception as exc:  # noqa: BLE001 - keep the lead; record why the site was not read
                             lead.processing_error = f"enrichment: {type(exc).__name__}: {exc}"[:500]
+                if not await self._keep_in_place(lead, business, res):
+                    continue  # outside the campaign's place, or no evidence it is there: not delivered, not charged
                 named = await self._decision_makers(business, res, sets)
                 if hunter_ctx is not None and business.normalized_domain:
                     # Paid lookups only for leads the free sources could not name a decision maker for.
@@ -1120,12 +1328,13 @@ class CampaignPipeline:
     async def _decision_makers(
         self, business: Business, res: WebsiteResearch | None, sets: dict[str, set[str]]
     ) -> bool:
-        """Name who decides at the business and find how to reach that person directly. Always on.
+        """Name who decides at the business, prove it, and find how to reach that person directly. Always on.
 
-        Order (cheapest and most certain first): the site's schema.org data, team/about pages and the contacts
-        printed next to each name; social bios; addresses already found that carry the person's name; LinkedIn
-        results via Brave when nobody is named; then the person's own public accounts via Brave; finally the
-        paid people finders (Hunter -> Apollo -> Lusha) only while the decision maker has no direct channel."""
+        Candidates (cheapest and most certain first): the site's schema.org data, team/about pages and the
+        contacts printed next to each name; social bios; LinkedIn results via Brave when the business names
+        nobody itself; the AI research council (web-searching models) when nobody is named first-hand; Apollo.
+        Then enrichment/verify_people.py keeps only people proven on pages read by us - nobody else is saved.
+        Only the verified decision maker gets the person search and the paid finders (Hunter -> Apollo -> Lusha)."""
         if self.campaign.is_demo:
             return False
         roles = await self._target_roles()
@@ -1149,14 +1358,33 @@ class CampaignPipeline:
         )
         for url, excerpt, signal_key in bios.all():
             platform = (signal_key or "social:social").split(":", 1)[1]
-            people += from_text(excerpt or "", url or "", platform, confidence=0.45, extra_roles=roles)
-        if not people:
-            people = await self._linkedin_people(business, roles)
+            people += from_text(
+                excerpt or "",
+                url or "",
+                platform,
+                confidence=0.45,
+                extra_roles=roles,
+                business_names=(business.name, business.normalized_domain or ""),
+            )
+        biz = await self._identity(business)
+        first_hand = any(dm.rank >= 2 and known_proofs(dm, biz) for dm in people)
+        if not first_hand:
+            people += await self._linkedin_people(business, roles)
+            people += await self._ai_council(business, biz, roles)
         if not people and business.normalized_domain:
             people = await self._apollo_people(business, roles)
-        merged = merge(people, roles)[:3]
+        merged = merge(people, roles)[:4]
         if not merged:
             return False
+        verified, rejected = await self._verify(merged, biz)
+        if not verified and merged[0].rank >= 2 and not merged[0].profiles:
+            # One more independent proof may be all the best candidate lacks: their own public accounts.
+            await self._person_profiles(business, merged[0])
+            verified, rejected = await self._verify(merged, biz)
+        self._people_rejected += rejected
+        if not verified:
+            return False
+        verified = verified[:3]
         emails = (
             await self.db.execute(
                 select(BusinessContact.normalized_value, BusinessContact.source_url).where(
@@ -1164,17 +1392,114 @@ class CampaignPipeline:
                 )
             )
         ).all()
-        attach_known_emails(merged, [(e, u or "") for e, u in emails], business.normalized_domain)
-        top = merged[0]
+        attach_known_emails([dm for dm, _ in verified], [(e, u or "") for e, u in emails], business.normalized_domain)
+        top = verified[0][0]
         await self._person_profiles(business, top)
         if not top.has_direct_contact:
             await self._paid_contact(business, top)
-        for dm in merged:
-            await self._save_person(business, dm, sets)
+        for dm, verdict in verified:
+            await self._save_person(business, dm, sets, verdict)
         self._people_found += 1
         if top.has_direct_contact:
             self._direct_found += 1
         return True
+
+    async def _identity(self, business: Business) -> BusinessIdentity:
+        """Who the business is, for telling its people from namesakes: name, site, place, phone, own accounts."""
+        socials = (
+            await self.db.execute(
+                select(BusinessContact.value, BusinessContact.confidence).where(
+                    BusinessContact.business_id == business.id,
+                    BusinessContact.type == ContactType.SOCIAL,
+                    BusinessContact.person_name.is_(None),
+                )
+            )
+        ).all()
+        own = [v for v, conf in socials if conf >= STRONG_CONFIDENCE]  # found-by-name guesses are not its own
+        phone = await self.db.scalar(
+            select(BusinessContact.normalized_value)
+            .where(
+                BusinessContact.business_id == business.id,
+                BusinessContact.type == ContactType.PHONE,
+                BusinessContact.person_name.is_(None),
+            )
+            .limit(1)
+        )
+        return BusinessIdentity(
+            name=business.name,
+            domain=business.normalized_domain,
+            city=business.city or self.campaign.city,
+            country=business.country or self.campaign.country,
+            phone=phone,
+            handles=[v.rstrip("/").rsplit("/", 1)[-1].lstrip("@") for v in own],
+            profiles={v.lower().rstrip("/") for v in own},
+        )
+
+    async def _verify(
+        self, people: list[DecisionMaker], biz: BusinessIdentity
+    ) -> tuple[list[tuple[DecisionMaker, Verdict]], int]:
+        ai = await self._people_ai()
+        transport = self._site_transport()
+        verified, cost, rejected = await verify_people(
+            people, biz, ai=ai, transport=transport, skip_dns_check=transport is not None and self.campaign.is_demo
+        )
+        if cost and ai is not None:
+            self._record_usage(ai.provider or "ai", "decision_maker_check", cost)
+        return verified, rejected
+
+    async def _council_keys(self) -> dict[str, str]:
+        if self._council is None:
+            self._council = {}
+            for key in COUNCIL:
+                state = await provider_svc.provider_state(self.db, self.campaign.workspace_id, key)
+                if state.status == ProviderStatus.CONNECTED:
+                    creds = (await provider_svc.credentials_for(self.db, self.campaign.workspace_id, key))[0]
+                    if creds.get("api_key"):
+                        self._council[key] = creds["api_key"]
+        return {k: v for k, v in self._council.items() if k not in self._council_off}
+
+    async def _ai_council(
+        self, business: Business, biz: BusinessIdentity, roles: tuple[str, ...]
+    ) -> list[DecisionMaker]:
+        """Ask the connected web-searching models who runs the business (answers cached per business). Only
+        businesses with a usable contact are asked, so the cost goes to leads that can be delivered."""
+        keys = await self._council_keys()
+        if not keys or self._council_blocked:
+            return []
+        usable = await self.db.scalar(
+            select(func.count()).where(
+                BusinessContact.business_id == business.id,
+                BusinessContact.type.in_([ContactType.EMAIL, ContactType.PHONE, ContactType.WHATSAPP]),
+                BusinessContact.verification_status != VerificationStatus.INVALID,
+            )
+        )
+        if not usable:
+            return []
+        s = get_settings()
+        cache_key = f"council:{business.id}"
+        answers = await _cache_get(cache_key)
+        if answers is None:
+            if not await take_quota(self.campaign.workspace_id, "ai_council", s.ai_council_daily_limit):
+                self._council_blocked = True
+                await self.event(
+                    Stage.CONTACT_ENRICHMENT,
+                    "ai_council_limit",
+                    "Daily limit of AI research reached; remaining decision makers use the other sources.",
+                    level="warning",
+                    t="ai_council_limit",
+                )
+                return []
+            identity = {**biz.as_dict(), "category": business.industry, "address": business.address}
+            answers = await ask_council(keys, identity, transport=self.council_transport)
+            for a in answers:
+                if a.error:
+                    if "API key" in a.error or "balance" in a.error:
+                        self._council_off.add(a.provider)  # account problem: stop asking it this run
+                        await self._finder_event(a.provider, "people_finder_error", f"{a.provider}: {a.error}")
+                    continue
+                self._record_usage(a.provider, "ai_council", a.cost_usd)
+            await _cache_set(cache_key, dump_answers(answers), s.ai_council_cache_days * 86400)
+        return to_candidates(answers, roles)
 
     async def _linkedin_people(self, business: Business, roles: tuple[str, ...]) -> list[DecisionMaker]:
         if self._people_search_blocked:
@@ -1185,7 +1510,12 @@ class CampaignPipeline:
             return []
         try:
             people = await search_linkedin(
-                business.name, key, transport=self.search_transport, roles=roles, place=self._place
+                business.name,
+                key,
+                transport=self.search_transport,
+                roles=roles,
+                place=self._place,
+                domain=business.normalized_domain,
             )
             self._record_usage("brave", "people_search", get_settings().cost_brave_per_request)
             return people
@@ -1229,6 +1559,7 @@ class CampaignPipeline:
                 handles=handles,
                 transport=self.search_transport,
                 place=self._place,
+                shared=await self._business_lines(business),
             )
             if calls:
                 self._record_usage("brave", "person_search", s.cost_brave_per_request, units=calls)
@@ -1237,6 +1568,17 @@ class CampaignPipeline:
             log.info("person search stopped", extra={"error": str(exc)[:200]})
         except httpx.HTTPError as exc:
             log.info("person search failed", extra={"error": str(exc)[:200]})
+
+    async def _business_lines(self, business: Business) -> set[str]:
+        """The business's general phone/email values (not tied to a person): never a person's direct line."""
+        rows = await self.db.scalars(
+            select(BusinessContact.normalized_value).where(
+                BusinessContact.business_id == business.id,
+                BusinessContact.type.in_([ContactType.EMAIL, ContactType.PHONE, ContactType.WHATSAPP]),
+                BusinessContact.person_name.is_(None),
+            )
+        )
+        return set(rows)
 
     async def _people_finders(self) -> list[tuple[str, Any]]:
         """Connected paid people finders in the configured order, each with its provider context."""
@@ -1305,19 +1647,25 @@ class CampaignPipeline:
             p={"provider": key},
         )
 
-    async def _save_person(self, business: Business, dm: DecisionMaker, sets: dict[str, set[str]]) -> None:
-        """One PERSON row per decision maker plus one row per direct channel, each tagged with their name."""
+    async def _save_person(
+        self, business: Business, dm: DecisionMaker, sets: dict[str, set[str]], verdict: Verdict
+    ) -> None:
+        """One PERSON row per verified decision maker (with the proof behind it) plus one row per direct
+        channel, each tagged with their name."""
         sources = "+".join(dm.sources) if dm.sources else dm.source
+        if verdict.role and role_rank(verdict.role) >= dm.rank:
+            dm.role = verdict.role[:200]
+        dm.confidence = max(dm.confidence, verdict.confidence)
         await self._upsert_contact(
             business,
             ContactFinding(
                 ContactType.PERSON,
                 dm.email or dm.linkedin_url or dm.name,
                 f"person:{dm.key}",
-                dm.source_url,
+                verdict.proofs[0].url if verdict.proofs else dm.source_url,
                 subtype=PERSON_CHANNEL,
                 confidence=dm.confidence,
-                verification_status=VerificationStatus.DISCOVERED,
+                verification_status=VerificationStatus.VERIFIED,
                 usage_restrictions=PERSON_NOTE,
                 person_name=dm.name,
                 person_role=dm.role,
@@ -1325,6 +1673,19 @@ class CampaignPipeline:
             ),
             sets,
         )
+        row = await self.db.scalar(
+            select(BusinessContact).where(
+                BusinessContact.business_id == business.id,
+                BusinessContact.type == ContactType.PERSON,
+                BusinessContact.normalized_value == f"person:{dm.key}",
+            )
+        )
+        if row is not None:  # also when the row existed from an earlier run: refresh status and proof
+            row.verification_status = VerificationStatus.VERIFIED
+            row.verified_at = datetime.now(UTC)
+            row.confidence = max(row.confidence, dm.confidence)
+            row.person_role = dm.role
+            row.evidence = {**(row.evidence or {}), **verdict.evidence()}
         channels = [
             (ContactType.EMAIL, "email", dm.email),
             (ContactType.PHONE, "phone", dm.phone),
@@ -1623,6 +1984,7 @@ class CampaignPipeline:
             transport=transport,
             skip_dns_check=transport is not None and self.campaign.is_demo,
             roles=self._roles or (),  # resolved once in stage_enrichment (no DB calls inside gather)
+            business_names=(business.name, business.normalized_domain or ""),
         )
 
     async def _save_research(self, business: Business, res: WebsiteResearch, sets: dict[str, set[str]]) -> None:
@@ -1696,6 +2058,8 @@ class CampaignPipeline:
         business.last_enriched_at = now
 
     async def _upsert_contact(self, business: Business, f: ContactFinding, sets: dict[str, set[str]]) -> None:
+        if f.type == ContactType.EMAIL and is_junk_email(f.normalized_value):
+            return  # placeholder, image name, tracker id or disposable mailbox: never a lead's contact
         existing = await self.db.scalar(
             select(BusinessContact).where(
                 BusinessContact.business_id == business.id,
@@ -1710,6 +2074,11 @@ class CampaignPipeline:
             existing.confidence = max(existing.confidence, f.confidence)
             existing.retrieved_at = datetime.now(UTC)
             existing.source_url = existing.source_url or f.source_url
+            sources = _sources_of(existing)
+            if f.source_provider and _source_family(f.source_provider) not in {_source_family(x) for x in sources}:
+                # Another independent source published the same value: it is corroborated.
+                existing.evidence = {**(existing.evidence or {}), "sources": [*sources, f.source_provider]}
+                existing.confidence = min(0.95, existing.confidence + 0.1)
             return
         self.db.add(
             BusinessContact(
@@ -1726,6 +2095,7 @@ class CampaignPipeline:
                 person_name=f.person_name,
                 person_role=f.person_role,
                 is_suppressed=contact_is_suppressed(f.type, f.normalized_value, sets),
+                evidence={"sources": [f.source_provider]} if f.source_provider else None,
             )
         )
         await self.db.flush()
@@ -1809,19 +2179,21 @@ class CampaignPipeline:
             )
 
     async def _mx_check(self, business: Business) -> None:
-        """Mark emails whose domain cannot receive mail as invalid. Never upgrades anything to 'verified'."""
+        """Mark emails whose domain cannot receive mail as invalid. Never upgrades anything to 'verified'.
+
+        Email rows only: a PERSON row's value is "person:<key>", which has no mail domain to check."""
         await self.db.flush()
         emails = await self.db.scalars(
             select(BusinessContact).where(
                 BusinessContact.business_id == business.id,
-                BusinessContact.type.in_([ContactType.EMAIL, ContactType.PERSON]),
+                BusinessContact.type == ContactType.EMAIL,
                 BusinessContact.verification_status.in_([VerificationStatus.DISCOVERED, VerificationStatus.UNKNOWN]),
             )
         )
         cache = self.__dict__.setdefault("_mx_cache", {})
         for contact in emails:
-            domain = contact.normalized_value.rpartition("@")[2]
-            if not domain:
+            local, at, domain = contact.normalized_value.rpartition("@")
+            if not at or not local or not domain:
                 continue
             accepts = await domain_accepts_mail(domain, cache)
             if accepts is False:
@@ -2031,6 +2403,18 @@ class CampaignPipeline:
                 )
             ).all()
             summary = ContactSummary()
+            deciders = {
+                c.person_name
+                for c in contacts
+                if c.type == ContactType.PERSON and c.verification_status == VerificationStatus.VERIFIED
+            }
+            summary.verified_decision_maker = bool(deciders)
+            summary.decision_maker_direct = any(
+                c.person_name in deciders
+                and c.type in (ContactType.EMAIL, ContactType.PHONE, ContactType.WHATSAPP)
+                and c.verification_status != VerificationStatus.INVALID
+                for c in contacts
+            )
             for c in contacts:
                 if c.verification_status == VerificationStatus.INVALID:
                     continue
@@ -2135,6 +2519,7 @@ async def execute_campaign(
     page_source: PageSource | None = None,
     search_transport: httpx.AsyncBaseTransport | None = None,
     finder_transport: httpx.AsyncBaseTransport | None = None,
+    council_transport: httpx.AsyncBaseTransport | None = None,
 ) -> CampaignStatus | None:
     """Entry point used by the Celery worker (and tests). Idempotent: finished runs are not re-executed."""
     campaign = await db.get(Campaign, campaign_id)
@@ -2154,6 +2539,7 @@ async def execute_campaign(
         page_source=page_source,
         search_transport=search_transport,
         finder_transport=finder_transport,
+        council_transport=council_transport,
     )
     status = await pipeline.execute()
     if status in (CampaignStatus.COMPLETED, CampaignStatus.PARTIALLY_COMPLETED, CampaignStatus.FAILED):

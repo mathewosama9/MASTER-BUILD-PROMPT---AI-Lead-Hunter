@@ -137,6 +137,9 @@ const en = {
     lusha: "Lusha",
     decision_maker: "Decision maker",
     deepseek: "DeepSeek",
+    perplexity: "Perplexity",
+    gemini: "Google Gemini",
+    ai_research: "AI research",
     anthropic: "Anthropic Claude",
     openai: "OpenAI",
     // Pipeline stages
@@ -261,6 +264,12 @@ const en = {
     social_search_done: "Search by name found {count} social profiles",
     social_search_needs_key: "Search by name is on but needs a connected Brave Search key; skipped.",
     decision_makers_done: "Decision maker identified for {count} businesses ({direct} with a direct email/phone)",
+    decision_makers_rejected: "{count} possible decision makers were not delivered because they could not be verified",
+    relevance_filtered:
+      "{total} businesses dropped as not matching the request ({industry} other kind of business, {far} outside the city, {closed} closed)",
+    ai_council_limit: "Today's AI research limit was reached; remaining decision makers use the other sources",
+    location_filtered:
+      "{total} businesses removed: {outside} outside the requested place, {unknown} with no evidence of being there (no credit charged)",
     people_finder_error: "{provider}: paid people finder unavailable for this run (check the key or plan)",
     people_finder_rate_limited: "{provider} rate limited; skipped for the rest of this run",
     decision_makers_disabled: "Decision-maker search is off: enable named business contacts in Settings > Workspace.",
@@ -818,6 +827,10 @@ const en = {
     reachVia: "Reach via the company's WhatsApp / phone, addressed to {name}",
     otherPeople: "Also named",
     viewProfile: "Profile",
+    verifiedFrom: "Verified from {n} sources",
+    verifiedOne: "Verified on the company's own page",
+    proofs: "Proof",
+    confirmedBy: "Confirmed by {n} sources",
   },
   crm: {
     new: "New",
@@ -1113,6 +1126,9 @@ const ar: Dictionary = {
     lusha: "Lusha",
     decision_maker: "صاحب القرار",
     deepseek: "DeepSeek",
+    perplexity: "Perplexity",
+    gemini: "Google Gemini",
+    ai_research: "بحث بالذكاء الاصطناعي",
     anthropic: "Anthropic Claude",
     openai: "OpenAI",
     created: "تم الإنشاء",
@@ -1210,6 +1226,10 @@ const ar: Dictionary = {
     anthropic: "مزود الذكاء الاصطناعي المفضل للتحليل وكتابة الرسائل.",
     openai: "مزود ذكاء اصطناعي بديل اختياري.",
     deepseek: "تحليل وكتابة رسائل واستهداف باللغة الطبيعية عبر واجهة DeepSeek (مع التحقق من مخرجات JSON).",
+    perplexity:
+      "بحث بالذكاء الاصطناعي على النت: بيتسأل مين صاحب كل شركة ومعاه المصادر، وإجابته بتتراجع على صفحات بنفتحها بنفسنا قبل ما حد يتسلّم.",
+    gemini:
+      "Gemini مع البحث في جوجل، قوي في الأسواق المحلية؛ إجاباته عن صاحب القرار بتتراجع قبل التسليم.",
     firecrawl: "زحف مُدار اختياري (غير مطلوب؛ الزاحف المدمج يُستخدم افتراضياً).",
     telegram: "رمز البوت لواجهة تيليجرام.",
     google_sheets: "ملف JSON لحساب الخدمة لتصدير العملاء إلى Google Sheets.",
@@ -1252,6 +1272,12 @@ const ar: Dictionary = {
     social_search_done: "البحث بالاسم لقى {count} حساب سوشيال ميديا",
     social_search_needs_key: "البحث بالاسم مفعّل لكنه يحتاج مفتاح Brave Search متصل؛ تم التخطي.",
     decision_makers_done: "تم تحديد صاحب القرار لـ {count} شركة ({direct} منهم بإيميل أو موبايل مباشر)",
+    decision_makers_rejected: "{count} أسماء محتملة لأصحاب قرار ما اتسلمتش لأننا ما قدرناش نتأكد منها",
+    relevance_filtered:
+      "اتشال {total} نشاط مش مطابق للطلب ({industry} نشاط مختلف، {far} خارج المدينة، {closed} مقفول)",
+    ai_council_limit: "وصلنا لحد البحث بالذكاء الاصطناعي النهارده؛ باقي أصحاب القرار بيتدوّر عليهم من المصادر التانية",
+    location_filtered:
+      "اتشال {total} نشاط: {outside} برّه المكان المطلوب، و{unknown} مفيش دليل إنه فيه (من غير خصم كريديت)",
     people_finder_error: "{provider}: مصدر صاحب القرار المدفوع مش متاح في الحملة دي (راجع المفتاح أو الباقة)",
     people_finder_rate_limited: "{provider} وصل للحد المسموح؛ اتوقف لباقي الحملة",
     decision_makers_disabled: "البحث عن صاحب القرار مقفول: فعّل \"السماح بجهات اتصال مسماة\" من الإعدادات ← مساحة العمل.",
@@ -1816,6 +1842,10 @@ const ar: Dictionary = {
     reachVia: "تواصل عبر واتساب أو هاتف الشركة لعناية {name}",
     otherPeople: "أسماء أخرى",
     viewProfile: "البروفايل",
+    verifiedFrom: "تم التحقق من {n} مصادر",
+    verifiedOne: "متأكد منه من صفحة الشركة نفسها",
+    proofs: "الإثبات",
+    confirmedBy: "مؤكد من {n} مصادر",
   },
   crm: {
     new: "جديد",

@@ -91,6 +91,9 @@ function ContactRow({ c, leadId, message }: { c: Contact; leadId: string; messag
           </a>
           <Badge tone="neutral">{label(c.type)}{c.subtype ? ` · ${label(c.subtype)}` : ""}</Badge>
           <VerificationBadge status={c.verification_status} />
+          {c.type !== "person" && (c.sources_count ?? 0) >= 2 ? (
+            <Badge tone="green">{t.leads.confirmedBy.replace("{n}", String(c.sources_count))}</Badge>
+          ) : null}
           {c.is_suppressed ? <Badge tone="red">{t.leads.suppressed}</Badge> : null}
         </div>
         {c.person_name ? <p className="text-xs">{c.person_name}{c.person_role ? ` — ${c.person_role}` : ""}</p> : null}
@@ -257,6 +260,14 @@ function DecisionMakerCard({ contacts, message }: { contacts: Contact[]; message
             <p className="text-base font-semibold">{top.person_name}</p>
             {top.person_role ? <p className="text-sm text-muted-foreground">{top.person_role}</p> : null}
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              {top.verification_status === "verified" ? (
+                <Badge tone="green">
+                  <CheckCircle2 className="size-3" />{" "}
+                  {(top.sources_count ?? 1) >= 2
+                    ? t.leads.verifiedFrom.replace("{n}", String(top.sources_count))
+                    : t.leads.verifiedOne}
+                </Badge>
+              ) : null}
               {[...new Set(top.source_provider.split("+").map((src) => source(src)))].map((src) => (
                 <Badge key={src} tone="blue">{src}</Badge>
               ))}
@@ -306,7 +317,23 @@ function DecisionMakerCard({ contacts, message }: { contacts: Contact[]; message
             </div>
           </div>
         ) : null}
-        {sourceHref && !profiles.some((c) => c.value === sourceHref) && sourceHref !== linkedin ? (
+        {top.proof_links?.length ? (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">{t.leads.proofs}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {top.proof_links.map((url) => {
+                const href = safeHttpUrl(url);
+                return href ? (
+                  <Button key={url} asChild size="sm" variant="ghost">
+                    <a href={href} target="_blank" rel="noopener noreferrer nofollow">
+                      <Globe /> <span dir="ltr">{new URL(href).hostname.replace(/^www\./, "")}</span>
+                    </a>
+                  </Button>
+                ) : null;
+              })}
+            </div>
+          </div>
+        ) : sourceHref && !profiles.some((c) => c.value === sourceHref) && sourceHref !== linkedin ? (
           <Button asChild size="sm" variant="ghost">
             <a href={sourceHref} target="_blank" rel="noopener noreferrer nofollow"><Globe /> {t.leads.sourceLink}</a>
           </Button>

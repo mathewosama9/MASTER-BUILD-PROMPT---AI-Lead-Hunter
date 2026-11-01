@@ -71,7 +71,26 @@ def osm_transport(calls: list[str] | None = None) -> httpx.MockTransport:
             calls.append(str(request.url))
         if "nominatim" in request.url.host:
             assert request.headers["user-agent"].startswith("AILeadHunter")
-            return httpx.Response(200, json=[{"osm_type": "relation", "osm_id": 123}])
+            assert request.url.params["q"] == "Riyadh" and request.url.params["limit"] == "5"
+            rows = [
+                {
+                    "osm_type": "relation",
+                    "osm_id": 9,
+                    "lat": "24",
+                    "lon": "45",
+                    "name": "Riyadh Region",
+                    "place_rank": 8,
+                },
+                {
+                    "osm_type": "relation",
+                    "osm_id": 123,
+                    "lat": "24.6",
+                    "lon": "46.7",
+                    "name": "Riyadh",
+                    "place_rank": 16,
+                },
+            ]
+            return httpx.Response(200, json=rows)
         body = request.content.decode()
         assert "area(id:3600000123)" in httpx.QueryParams(body)["data"]
         return httpx.Response(200, json=OVERPASS)
@@ -523,7 +542,7 @@ async def test_real_campaign_with_osm_import_and_social_enrichment(client, dispa
     assert len(nocontact) == 1 and nocontact[0].identifiers == {"osm": "node/1"}
 
     lead = (await client.get(f"/api/v1/leads/{smile.id}")).json()
-    assert lead["score"]["scoring_version"] == "1.1.0"
+    assert lead["score"]["scoring_version"] == "1.2.0"
     assert any(e["kind"] == "social_profile" for e in lead["evidence"])
 
 

@@ -17,6 +17,7 @@ from app.models import (
     LeadTag,
 )
 from app.models.enums import ContactType, CrmStatus, VerificationStatus
+from app.schemas.lead import ContactOut
 from app.services.suppression import outreach_eligible, suppression_sets
 
 
@@ -194,6 +195,37 @@ async def get_business(db: AsyncSession, workspace_id: uuid.UUID, business_id: u
     if b is None:
         raise NotFound("Lead not found")
     return b
+
+
+PUBLIC_PROOF_KINDS = ("first_party", "professional", "third_party")  # people databases stay unnamed
+
+
+def delivered_contacts(contacts: list[BusinessContact]) -> list[ContactOut]:
+    """Contacts as the customer sees them: only VERIFIED decision makers. A channel saved under a person who
+    is not verified (earlier runs) stays as a plain business contact, without the name."""
+    verified = {
+        c.person_name
+        for c in contacts
+        if c.type == ContactType.PERSON and c.verification_status == VerificationStatus.VERIFIED
+    }
+    out: list[ContactOut] = []
+    for c in contacts:
+        if c.type == ContactType.PERSON and c.verification_status != VerificationStatus.VERIFIED:
+            continue
+        item = ContactOut.model_validate(c)
+        ev = c.evidence or {}
+        if c.type == ContactType.PERSON:
+            item.proof_links = [
+                p["url"] for p in ev.get("proofs", []) if p.get("kind") in PUBLIC_PROOF_KINDS and p.get("url")
+            ][:5]
+            item.sources_count = ev.get("sources_count")
+        elif ev.get("sources"):
+            item.sources_count = len(set(ev["sources"]))
+        if c.person_name and c.type != ContactType.PERSON and c.person_name not in verified:
+            item.person_name = item.person_role = None
+            item.subtype = None if item.subtype == "decision_maker" else item.subtype
+        out.append(item)
+    return out
 
 
 def best_contact(contacts: list[BusinessContact], ctype: ContactType) -> BusinessContact | None:

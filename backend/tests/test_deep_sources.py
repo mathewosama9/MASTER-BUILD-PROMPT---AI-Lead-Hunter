@@ -66,7 +66,7 @@ def test_cards_with_the_title_under_the_name_in_any_industry():
       <div><h4>أحمد محمود سالم</h4><span>مدير المدرسة</span></div>
       <div><h4>Sara Ali</h4><p>Procurement Manager</p></div>
       <div><h4>General Manager</h4><p>Our team</p></div>
-      <div><h4>Noura Alsalem</h4><p>Dr. Diana Shaath</p><p>Floor Manager</p></div>
+      <div><h4>Noura Alsalem</h4><p>Dr. Diana Shaath</p><p>Clinic Manager</p></div>
       <div><h4>Vidya Chamle</h4><p>Product Owner</p></div>
       <div><a>View Expertise</a><p>Head of Dermatology</p></div></section>"""
     found = {(d.name, d.role) for d in from_cards(html, "u", ("Procurement Manager",))}
@@ -74,7 +74,7 @@ def test_cards_with_the_title_under_the_name_in_any_industry():
     assert found == {
         ("أحمد محمود سالم", "مدير المدرسة"),
         ("Sara Ali", "Procurement Manager"),
-        ("Dr. Diana Shaath", "Floor Manager"),
+        ("Dr. Diana Shaath", "Clinic Manager"),
     }
 
 
@@ -187,6 +187,7 @@ async def test_lusha_skips_do_not_call_numbers():
         data = {
             "emailAddresses": [{"email": "omar@smile-dental.sa"}],
             "phoneNumbers": [{"number": "+966 50 999 0000", "doNotCall": True}, {"number": "+966501112233"}],
+            "company": {"name": "Smile Dental Clinic"},
         }
         return httpx.Response(200, json={"contact": {"data": data}})
 
@@ -201,6 +202,77 @@ async def test_lusha_skips_do_not_call_numbers():
         transport=httpx.MockTransport(lusha),
     )
     assert dm.phone == "+966501112233" and dm.channel_sources["phone"] == "lusha"
+
+
+async def test_finders_never_attribute_a_namesake_at_another_company():
+    def lusha(request: httpx.Request) -> httpx.Response:
+        data = {"phoneNumbers": [{"number": "+966501112233"}], "company": {"name": "Bright Teeth"}}
+        return httpx.Response(200, json={"contact": {"data": data}})
+
+    dm = DecisionMaker("Omar Khaled", "Owner", "website", "u", "e", 0.5)
+    args = {"domain": None, "company": "Smile Dental", "country": "SA"}
+    assert not await people_finders.find_contact("lusha", _ctx([]), dm, **args, transport=httpx.MockTransport(lusha))
+
+    def lusha_no_employer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"contact": {"data": {"phoneNumbers": [{"number": "+966501112233"}]}}})
+
+    no_employer = httpx.MockTransport(lusha_no_employer)
+    assert not await people_finders.find_contact("lusha", _ctx([]), dm, **args, transport=no_employer)
+
+    def apollo(request: httpx.Request) -> httpx.Response:
+        person = {
+            "name": "Omar Khaled",
+            "title": "Founder",
+            "email": "omar@bright.sa",
+            "email_status": "verified",
+            "organization": {"name": "Bright Teeth", "primary_domain": "bright.sa"},
+        }
+        return httpx.Response(200, json={"person": person})
+
+    assert not await people_finders.find_contact(
+        "apollo",
+        _ctx([]),
+        dm,
+        domain="smile-dental.sa",
+        company="Smile",
+        country="SA",
+        transport=httpx.MockTransport(apollo),
+    )
+    assert not dm.has_direct_contact
+
+
+async def test_guessed_emails_are_never_kept():
+    def apollo(request: httpx.Request) -> httpx.Response:
+        person = {"name": "Omar Khaled", "title": "Founder", "email": "omar@smile.sa", "email_status": "guessed"}
+        return httpx.Response(200, json={"person": person})
+
+    dm = DecisionMaker("Omar Khaled", "Owner", "website", "u", "e", 0.5)
+    assert not await people_finders.find_contact(
+        "apollo", _ctx([]), dm, domain="smile.sa", company="Smile", country="SA", transport=httpx.MockTransport(apollo)
+    )
+
+    def hunter(request: httpx.Request) -> httpx.Response:
+        if "email-finder" in request.url.path:
+            return httpx.Response(200, json={"data": {"email": "omar@smile.sa", "score": 95}})
+        return httpx.Response(200, json={"data": {"status": "accept_all"}})  # verifier cannot confirm it
+
+    assert not await people_finders.find_contact(
+        "hunter", _ctx([]), dm, domain="smile.sa", company="Smile", country="SA", transport=httpx.MockTransport(hunter)
+    )
+
+    def low_score(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"email": "omar@smile.sa", "score": 40}})
+
+    assert not await people_finders.find_contact(
+        "hunter",
+        _ctx([]),
+        dm,
+        domain="smile.sa",
+        company="Smile",
+        country="SA",
+        transport=httpx.MockTransport(low_score),
+    )
+    assert not dm.has_direct_contact
 
 
 async def test_finder_account_errors_are_raised_for_the_pipeline_to_stop_that_finder():

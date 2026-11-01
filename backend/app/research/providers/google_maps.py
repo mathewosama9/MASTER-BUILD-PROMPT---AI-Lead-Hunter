@@ -162,5 +162,6 @@ def _to_candidate(place: MapsPlace, link: str, query: SearchQuery) -> BusinessCa
             "lat": place.lat,
             "lng": place.lng,
             "feature_id": place.feature_id,
+            "closed": place.closed,
         },
     )

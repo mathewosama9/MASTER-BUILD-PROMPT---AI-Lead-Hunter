@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 from app.models.enums import Priority
 
-SCORING_VERSION = "1.1.0"
+SCORING_VERSION = "1.2.0"
 
 DEFAULT_WEIGHTS: dict[str, float] = {
     "industry_fit": 0.25,
@@ -30,6 +30,8 @@ class ContactSummary:
     discovered_role_email: int = 0
     discovered_phone_or_whatsapp: int = 0
     indirect_only: int = 0  # contact page / social only
+    verified_decision_maker: bool = False  # a decision maker proven by verify_people
+    decision_maker_direct: bool = False  # ...with their own email/phone/WhatsApp
 
 
 @dataclass
@@ -119,6 +121,12 @@ def score_lead(
     else:
         contact = 0.0
         expl.append("Contact availability 0: no business contact channel found.")
+    if c.verified_decision_maker and c.decision_maker_direct:
+        contact = 1.0
+        expl.append("Contact availability 1.0: verified decision maker with a direct channel.")
+    elif c.verified_decision_maker and contact:
+        contact = min(1.0, contact + 0.1)
+        expl.append(f"Contact availability {contact:.2f}: includes a verified decision maker.")
 
     # Evidence strength
     sig = min((inp.observed_signal_count + inp.external_observations) / 5.0, 1.0)

@@ -1,13 +1,12 @@
 """Unauthenticated endpoints for the public site: trial terms, credit packages and the contact form."""
 
 import logging
-
 import re
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.api.deps import DB
 from app.api.v1.billing import active_packages
@@ -227,6 +226,8 @@ async def preview(
             BusinessContact.business_id.in_(ids),
             BusinessContact.type.in_(PREVIEW_CONTACT_TYPES),
             BusinessContact.is_suppressed.is_(False),
+            # a decision maker counts only once verified
+            or_(BusinessContact.type != ContactType.PERSON, BusinessContact.verification_status == "verified"),
         )
     ):
         kinds[bid].add(kind)

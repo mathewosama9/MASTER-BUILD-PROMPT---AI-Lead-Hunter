@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import unquote, urljoin, urlparse
 
+import phonenumbers
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from app.models.enums import ContactType, VerificationStatus
@@ -17,6 +18,25 @@ from app.research.enrichment.normalize import normalize_domain, normalize_email,
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}")
 PHONE_RE = re.compile(r"(?:\+|00)\d[\d\s\-().]{7,18}\d")
+
+
+def find_phones(text: str, country: str | None) -> list[str]:
+    """Phone numbers written in text: international ones (+/00) always, and - when the market is known - local
+    ones with the trunk prefix ("050 123 4567", "02 123 4567"), kept only when valid for that country. Bare digit
+    runs without a leading 0 (order numbers, registration ids) are never read as phones."""
+    found = list(dict.fromkeys(PHONE_RE.findall(text or "")))
+    if country and text:
+        try:
+            matcher = phonenumbers.PhoneNumberMatcher(text, country.upper(), leniency=phonenumbers.Leniency.VALID)
+            for m in matcher:
+                raw = m.raw_string.strip()
+                if raw.startswith("0") and not raw.startswith("00") and raw not in found:
+                    found.append(raw)
+        except Exception:  # noqa: BLE001, S110 - an unknown region code just means no local numbers
+            pass
+    return found
+
+
 ROLE_PREFIXES = {
     "info": "general",
     "contact": "general",
@@ -42,7 +62,62 @@ ROLE_PREFIXES = {
     "jobs": "hr",
 }
 FREE_MAIL = {"gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com", "live.com"}
-IGNORED_EMAIL_DOMAINS = {"example.com", "sentry.io", "wixpress.com", "domain.com", "email.com"}
+IGNORED_EMAIL_DOMAINS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "sentry.io",
+    "wixpress.com",
+    "domain.com",
+    "email.com",
+    "yourdomain.com",
+    "yoursite.com",
+    "mysite.com",
+    "company.com",
+    "test.com",
+    # disposable mailboxes
+    "mailinator.com",
+    "guerrillamail.com",
+    "10minutemail.com",
+    "tempmail.com",
+    "temp-mail.org",
+    "yopmail.com",
+    "trashmail.com",
+    "sharklasers.com",
+}
+# Template and placeholder mailboxes left in themes ("your@email.com", "name@company.com").
+PLACEHOLDER_LOCALS = {
+    "your",
+    "youremail",
+    "yourname",
+    "name",
+    "user",
+    "username",
+    "email",
+    "test",
+    "example",
+    "someone",
+    "johndoe",
+    "john.doe",
+    "janedoe",
+    "jane.doe",
+    "firstname.lastname",
+    "first.last",
+}
+
+
+def is_junk_email(email: str) -> bool:
+    """Not a real mailbox of the business: placeholders, image file names, error-tracker ids, disposable domains."""
+    local, _, domain = (email or "").lower().rpartition("@")
+    if not local or not domain:
+        return True
+    if domain in IGNORED_EMAIL_DOMAINS or any(domain.endswith("." + d) for d in IGNORED_EMAIL_DOMAINS):
+        return True
+    if local in PLACEHOLDER_LOCALS or re.fullmatch(r"[0-9a-f]{24,}", local):
+        return True
+    return bool(re.search(r"\.(png|jpe?g|gif|webp|svg|avif)$", email) or re.search(r"@\d+x\.", email))
+
+
 SOCIAL_HOSTS = {
     "facebook.com": "facebook",
     "instagram.com": "instagram",
@@ -276,7 +351,7 @@ def extract_contacts(html: str, page_url: str, country: str | None, site_domain:
     body = tree.body.text(separator=" ") if tree.body else ""
     for email in set(EMAIL_RE.findall(body)):
         _add_email(result, email, page_url, site_domain)
-    for phone in set(PHONE_RE.findall(body)):
+    for phone in find_phones(body, country):
         _add_phone(result, phone, page_url, country)
     return result
 
@@ -285,8 +360,7 @@ def _add_email(result: ExtractionResult, raw: str, page_url: str, site_domain: s
     email = normalize_email(raw)
     if not email:
         return
-    domain = email.split("@")[1]
-    if domain in IGNORED_EMAIL_DOMAINS or re.search(r"\.(png|jpg|jpeg|gif|webp|svg)$", email):
+    if is_junk_email(email):
         return
     subtype, conf, restriction = classify_email(email, site_domain)
     result.add(

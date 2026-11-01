@@ -86,3 +86,12 @@ def test_custom_weights_are_normalized_and_recorded():
 def test_freshness_decays():
     old = score_lead(base(last_enriched_at=datetime.now(UTC) - timedelta(days=200)))
     assert old.factors["data_freshness"] == 0.2
+
+
+def test_a_verified_decision_maker_with_a_direct_channel_is_the_best_contact():
+    plain = score_lead(base(contacts=ContactSummary(discovered_phone_or_whatsapp=1)))
+    known = score_lead(base(contacts=ContactSummary(discovered_phone_or_whatsapp=1, verified_decision_maker=True)))
+    direct = score_lead(base(contacts=ContactSummary(verified_decision_maker=True, decision_maker_direct=True)))
+    assert plain.factors["contact_availability"] == 0.6
+    assert known.factors["contact_availability"] == 0.7
+    assert direct.factors["contact_availability"] == 1.0

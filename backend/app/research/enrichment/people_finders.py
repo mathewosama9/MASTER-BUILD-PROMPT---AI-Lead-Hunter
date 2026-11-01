@@ -4,9 +4,14 @@ Run in the order set by PEOPLE_FINDER_ORDER (default Hunter -> Apollo -> Lusha) 
 returns a direct channel. Every call is metered through `ctx.record_usage`, so it counts against the campaign's
 budget. Values come only from the provider's response; nothing is constructed.
 
-- Hunter Email Finder: name + domain -> the address Hunter has seen published (email only).
-- Apollo: People Match (name + domain -> email, phone, LinkedIn); People Search names who runs a domain.
+- Hunter Email Finder: name + domain -> the address Hunter has seen published (email only). Kept only with a
+  high score that Hunter's own verifier then confirms as deliverable; pattern guesses are dropped.
+- Apollo: People Match (name + domain -> email, phone, LinkedIn); People Search names who runs a domain. Only
+  "verified" emails are kept, never "guessed"/"extrapolated" ones.
 - Lusha: Person API (name + company -> emails and phones; numbers flagged "do not call" are skipped).
+
+Every answer must be about the same company: a person whose returned employer (domain or name) differs from the
+business is dropped, so a namesake at another company never becomes the decision maker.
 """
 
 import logging
@@ -15,8 +20,8 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.core.config import get_settings
-from app.research.enrichment.decision_makers import DecisionMaker, clean_name, role_rank
-from app.research.enrichment.normalize import normalize_email, normalize_phone
+from app.research.enrichment.decision_makers import DecisionMaker, clean_name, role_rank, same_business
+from app.research.enrichment.normalize import normalize_domain, normalize_email, normalize_phone
 from app.research.providers.base import ProviderContext, ProviderError, RateLimited
 from app.research.providers.hunter import HunterClient
 
@@ -27,6 +32,8 @@ LUSHA_API = "https://api.lusha.com"
 FINDERS = ("hunter", "apollo", "lusha")
 # Apollo seniorities that make the decision (People Search filter).
 APOLLO_SENIORITIES = ["owner", "founder", "c_suite", "partner", "director"]
+# Hunter Email Finder scores below this are pattern-based guesses.
+HUNTER_MIN_SCORE = 80
 
 
 @dataclass
@@ -38,10 +45,20 @@ class Found:
     source_url: str | None = None
     confidence: float = 0.7
     extra: dict = field(default_factory=dict)
+    org_domain: str | None = None  # the employer the provider returned, when it says
+    org_name: str | None = None
 
     @property
     def useful(self) -> bool:
         return bool(self.email or self.phone)
+
+    def same_company(self, domain: str | None, company: str) -> bool:
+        """False when the provider names an employer that is not this business."""
+        if self.org_domain and domain:
+            return normalize_domain(self.org_domain) == domain
+        if self.org_name:
+            return same_business(self.org_name, (company, domain or ""))
+        return True
 
 
 def split_name(name: str) -> tuple[str, str] | None:
@@ -75,11 +92,13 @@ async def hunter_find(
         return None
     async with HunterClient(ctx, transport) as hunter:
         data = await hunter.email_finder(domain, *names)
-    email = normalize_email(data.get("email") or "")
-    if not email:
-        return None
+        email = normalize_email(data.get("email") or "")
+        score = data.get("score") or 0
+        if not email or score < HUNTER_MIN_SCORE:
+            return None
+        if (await hunter.verify(email)).get("status") != "valid":
+            return None
     sources = data.get("sources") or []
-    score = data.get("score") or 50
     return Found(
         email=email,
         linkedin_url=data.get("linkedin_url"),
@@ -142,15 +161,18 @@ class ApolloClient:
 def _apollo_found(person: dict, country: str | None) -> Found:
     phones = [p.get("sanitized_number") or p.get("raw_number") for p in person.get("phone_numbers") or []]
     phone = next((n for p in phones if p and (n := normalize_phone(p, country))), None)
-    email = normalize_email(person.get("email") or "") if person.get("email_status") != "unavailable" else None
+    email = normalize_email(person.get("email") or "") if person.get("email_status") == "verified" else None
     url = person.get("linkedin_url")
+    org = person.get("organization") or {}
     return Found(
         email=email,
         phone=phone,
         linkedin_url=url,
         role=person.get("title"),
         source_url=url or "https://www.apollo.io",
-        confidence=0.75 if person.get("email_status") == "verified" else 0.6,
+        confidence=0.75 if email else 0.6,
+        org_domain=org.get("primary_domain") or org.get("website_url"),
+        org_name=org.get("name"),
     )
 
 
@@ -186,7 +208,10 @@ async def apollo_name_people(
             if not name or not role_rank(role):
                 continue
             found = _apollo_found(person, country)
+            if not found.same_company(domain, ""):
+                continue
             dm = DecisionMaker(name, role, "apollo", found.source_url or "https://www.apollo.io", role, 0.6)
+            dm.vouched_by.append("apollo")
             _apply(dm, found, "apollo")
             return [dm]
     return []
@@ -230,6 +255,10 @@ async def lusha_find(
     phone = next((n for p in phones if p and (n := normalize_phone(p, country))), None)
     title = data.get("jobTitle")
     social = data.get("socialLinks") or {}
+    org = data.get("company") if isinstance(data.get("company"), dict) else {}
+    org_name = org.get("name") or data.get("companyName")
+    if not domain and not org_name:
+        return None  # matched by name alone, with no employer to compare: not safe to attribute
     return Found(
         email=email,
         phone=phone,
@@ -237,6 +266,8 @@ async def lusha_find(
         role=title.get("title") if isinstance(title, dict) else title,
         source_url="https://www.lusha.com",
         confidence=0.7,
+        org_domain=org.get("domain") or org.get("fqdn") or org.get("website"),
+        org_name=org_name,
     )
 
 
@@ -253,7 +284,11 @@ def _apply(dm: DecisionMaker, found: Found, provider: str) -> None:
             dm.channel_sources["profile:linkedin"] = provider
     if provider not in dm.sources:
         dm.sources.append(provider)
-    dm.confidence = min(0.9, max(dm.confidence, found.confidence))
+    # A provider that files the person under a non-deciding title adds the contact, not certainty.
+    if not found.role or role_rank(found.role):
+        dm.confidence = min(0.9, max(dm.confidence, found.confidence))
+        if provider not in dm.vouched_by:
+            dm.vouched_by.append(provider)
 
 
 async def find_contact(
@@ -275,7 +310,7 @@ async def find_contact(
         found = await lusha_find(ctx, dm, domain, company, country, transport)
     else:
         return False
-    if found is None or not found.useful:
+    if found is None or not found.useful or not found.same_company(domain, company):
         return False
     _apply(dm, found, provider)
     return True

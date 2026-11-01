@@ -22,6 +22,7 @@ from app.research.enrichment.decision_makers import (
     from_json_ld,
     from_text,
 )
+from app.research.enrichment.location import map_points
 from app.research.enrichment.normalize import normalize_domain
 
 log = logging.getLogger(__name__)
@@ -128,6 +129,8 @@ class WebsiteResearch:
     structured_name: str | None = None
     address: str | None = None
     opening_hours: str | None = None
+    # Where the business is on the map, as the site publishes it: schema.org `geo` and Google Maps links/embeds.
+    coordinates: list[tuple[float, float]] = field(default_factory=list)
     # Decision makers named on the site (schema.org data and clear "role: name" text); see decision_makers.
     people: list[DecisionMaker] = field(default_factory=list)
 
@@ -159,6 +162,7 @@ async def research_website(
     transport: httpx.AsyncBaseTransport | None = None,
     skip_dns_check: bool = False,
     roles: tuple[str, ...] = (),
+    business_names: tuple[str, ...] = (),
 ) -> WebsiteResearch:
     domain = normalize_domain(url)
     result = WebsiteResearch(url=url, reachable=False)
@@ -220,15 +224,20 @@ async def research_website(
     for page_url, html in raw_html.items():
         for c in extract_contacts(html, page_url, country, domain).contacts:
             result.contacts.add(c)
+        for point in [*_geo_points(html), *map_points(html)]:
+            if point not in result.coordinates:
+                result.coordinates.append(point)
     result.signals = _detect_signals(raw_html, result)
     kinds = {p.url: p.kind for p in result.pages}
+    # Who the business is, to tell its own people from customers/partners quoted with their companies.
+    own = tuple(n for n in (*business_names, domain or "", result.structured_name or "") if n)
     for page_url, html in raw_html.items():
         result.people.extend(from_json_ld(html, page_url))
         if kinds.get(page_url) in ("home", "about", "team", "contact"):
-            result.people.extend(from_cards(html, page_url, roles))
+            result.people.extend(from_cards(html, page_url, roles, own))
     for page in result.pages:
         if page.kind in ("home", "about", "team", "contact"):
-            result.people.extend(from_text(page.excerpt, page.url, "website", extra_roles=roles))
+            result.people.extend(from_text(page.excerpt, page.url, "website", extra_roles=roles, business_names=own))
     # A person's own email/phone/WhatsApp/profiles printed next to their name. Values printed on several pages
     # (header/footer lines) are the business's, not the person's.
     shared = _sitewide_values(raw_html, country, domain)
@@ -249,6 +258,23 @@ def _sitewide_values(raw_html: dict[str, str], country: str | None, domain: str 
     if len(raw_html) == 1:
         return set()
     return {v for v, n in seen.items() if n >= 2}
+
+
+def _geo_points(html: str) -> list[tuple[float, float]]:
+    """schema.org GeoCoordinates published by the site (a LocalBusiness `geo`, or a Place inside it)."""
+    out: list[tuple[float, float]] = []
+    for entity in parse_json_ld(html):
+        geo = entity.get("geo")
+        for g in geo if isinstance(geo, list) else [geo]:
+            if not isinstance(g, dict):
+                continue
+            try:
+                lat, lon = float(g.get("latitude")), float(g.get("longitude"))
+            except (TypeError, ValueError):
+                continue
+            if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (0.0, 0.0):
+                out.append((lat, lon))
+    return out
 
 
 def _apply_structured(result: WebsiteResearch, html: str) -> None:

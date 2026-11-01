@@ -23,7 +23,7 @@ from app.core.safe_http import RobotsDisallowed, SafeFetcher, UnsafeURLError
 from app.models.enums import ProviderStatus
 from app.research import geo
 from app.research.catalog import COUNTRIES, INDUSTRIES, directory_sites, industry_terms, place_names
-from app.research.enrichment.contacts import EMAIL_RE, PHONE_RE, social_profile_url
+from app.research.enrichment.contacts import EMAIL_RE, find_phones, social_profile_url
 from app.research.enrichment.normalize import business_domain, homepage_url, normalize_domain
 from app.research.enrichment.social_search import SearchBlocked, _fold, web_search
 from app.research.providers.base import (
@@ -265,7 +265,7 @@ class DirectoryProvider:
                     queue[i:i] = [(link, site) for link in fresh]
                 if len(found) >= query.limit:
                     break
-        return list(found.values())[: query.limit]
+        return drop_directory_lines(list(found.values()))[: query.limit]
 
     def parse_listing(self, html: str, url: str, site: str, query: SearchQuery) -> list[BusinessCandidate]:
         out: list[BusinessCandidate] = []
@@ -299,6 +299,8 @@ class DirectoryProvider:
         if _LIST_PATH.search(urlparse(url).path):
             return []
         tree = HTMLParser(html)
+        for node in tree.css("header, footer, nav, script, style, noscript"):
+            node.decompose()  # the directory's own hotline and email live in its page chrome
         h1s = [h.text(strip=True) for h in tree.css("h1") if h.text(strip=True)]
         if len(h1s) != 1 or _DIRECTORY_WORDS.search(h1s[0]):
             return []
@@ -324,7 +326,7 @@ class DirectoryProvider:
                     website = homepage_url(urljoin(url, href))
         if not phone:
             body = tree.body.text(separator=" ") if tree.body else ""
-            phone = next(iter(PHONE_RE.findall(body)), None)
+            phone = next(iter(find_phones(body, query.country)), None)
             email = email or next(iter(EMAIL_RE.findall(body)), None)
         if not (phone or email or website):
             return []
@@ -375,3 +377,24 @@ class DirectoryProvider:
 
     async def test_connection(self, ctx: ProviderContext) -> ProviderState:
         return self.state(ctx)
+
+
+def drop_directory_lines(cands: list[BusinessCandidate]) -> list[BusinessCandidate]:
+    """A phone or email shown for several different businesses of one directory is the directory's own line
+    (hotline, ads desk), not theirs: remove it from all of them."""
+
+    def key(c: BusinessCandidate, value: str) -> tuple[str, str]:
+        return normalize_domain(c.source_url) or "", re.sub(r"[^\w@.]", "", value.lower())
+
+    names: dict[tuple[str, str], set[str]] = {}
+    for c in cands:
+        for value in (c.phone, c.email):
+            if value:
+                names.setdefault(key(c, value), set()).add(_fold(c.name))
+    shared = {k for k, n in names.items() if len(n) >= 2}
+    for c in cands:
+        if c.phone and key(c, c.phone) in shared:
+            c.phone = None
+        if c.email and key(c, c.email) in shared:
+            c.email = None
+    return cands

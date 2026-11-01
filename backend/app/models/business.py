@@ -73,6 +73,9 @@ class BusinessContact(UUIDPk, Timestamps, Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     usage_restrictions: Mapped[str | None] = mapped_column(String(500))
     is_suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # {"sources": [provider keys that published this value]}; for a verified decision maker also
+    # {"proofs": [{"url", "kind", "excerpt"}], "agreement": int, "reasons": [...]}.
+    evidence: Mapped[dict | None] = mapped_column(JSONType)
 
     business: Mapped[Business] = relationship(back_populates="contacts")
 

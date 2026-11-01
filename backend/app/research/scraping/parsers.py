@@ -91,6 +91,7 @@ class MapsPlace:
     hours: str | None = None
     lat: float | None = None
     lng: float | None = None
+    closed: str | None = None  # "permanent" | "temporary" when the listing says so
 
 
 def _label(node, prefix: str = "") -> str | None:  # noqa: ANN001
@@ -135,6 +136,13 @@ def parse_maps_place(html: str, url: str) -> MapsPlace:
     m = LATLNG_RE.search(url)
     if m:
         place.lat, place.lng = float(m.group(1)), float(m.group(2))
+    # The status line sits at the top of the place panel; only that part is read (not "people also search").
+    main = tree.css_first('div[role="main"]') or tree.body
+    head = (main.text(separator=" ", strip=True) if main is not None else "")[:1500]
+    if re.search(r"\bPermanently closed\b", head, re.I):
+        place.closed = "permanent"
+    elif re.search(r"\bTemporarily closed\b", head, re.I):
+        place.closed = "temporary"
     return place
 
 

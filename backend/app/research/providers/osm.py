@@ -12,7 +12,8 @@ import httpx
 
 from app.core.config import get_settings
 from app.models.enums import ProviderStatus
-from app.research.catalog import OSM_TAGS, city_names
+from app.research import geo
+from app.research.catalog import OSM_TAGS
 from app.research.enrichment.normalize import homepage_url
 from app.research.providers.base import (
     BusinessCandidate,
@@ -70,29 +71,28 @@ class OsmProvider:
     ) -> tuple[str, str]:
         """(Overpass prelude, spatial filter) for the campaign city, or the whole country when no city is set.
 
-        Cities mapped as an administrative boundary use that area; cities Nominatim only knows as a point
-        use a radius around that point (OSM_CITY_RADIUS_KM).
+        The place is chosen like everywhere else (geo.find_place: the answer whose own name matches, not simply
+        the first - "Al Ahsa" would otherwise search the whole Eastern Province). Places mapped as an
+        administrative boundary use that area; places Nominatim only knows as a point use a radius around it
+        (OSM_CITY_RADIUS_KM).
         """
         country = query.country.upper()
-        if not query.city:
+        if not query.city and not query.region:
             return f'area["ISO3166-1"="{country}"][admin_level=2]->.a;', "(area.a)"
-        city_en, _ = city_names(country, query.city)
-        resp = await client.get(
-            f"{get_settings().osm_nominatim_url}/search",
-            params={"city": city_en or query.city, "countrycodes": country.lower(), "format": "jsonv2", "limit": 3},
-        )
-        await ctx.record_usage(self.info.key, "nominatim_search", 1, 0.0, resp.status_code < 400, resp.status_code)
-        _raise_for(resp, "Nominatim")
-        places = resp.json()
-        for place in places:
-            offset = AREA_OFFSET.get(place.get("osm_type"))
-            if offset:
-                return f"area(id:{offset + int(place['osm_id'])})->.a;", "(area.a)"
-        for place in places:
-            if place.get("lat") and place.get("lon"):  # city known only as a point: search a radius around it
-                radius = int(get_settings().osm_city_radius_km * 1000)
-                return "", f"(around:{radius},{float(place['lat'])},{float(place['lon'])})"
-        raise ProviderError(f"OpenStreetMap could not locate the city '{query.city}' in {country}")
+        try:
+            place = await geo.find_place(client, country, query.city, query.region)
+        except httpx.HTTPStatusError as exc:
+            await ctx.record_usage(self.info.key, "nominatim_search", 1, 0.0, False, exc.response.status_code)
+            _raise_for(exc.response, "Nominatim")
+            raise
+        await ctx.record_usage(self.info.key, "nominatim_search", 1, 0.0, True, 200)
+        if place is None:
+            raise ProviderError(f"OpenStreetMap could not locate '{query.city or query.region}' in {country}")
+        offset = AREA_OFFSET.get(place.get("osm_type"))
+        if offset and place.get("osm_id"):
+            return f"area(id:{offset + int(place['osm_id'])})->.a;", "(area.a)"
+        radius = int(get_settings().osm_city_radius_km * 1000)  # known only as a point: a radius around it
+        return "", f"(around:{radius},{float(place['lat'])},{float(place['lon'])})"
 
     async def search_businesses(self, query: SearchQuery, ctx: ProviderContext) -> list[BusinessCandidate]:
         tags = OSM_TAGS.get(query.industry)

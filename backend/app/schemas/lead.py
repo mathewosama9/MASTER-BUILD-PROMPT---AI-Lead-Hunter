@@ -45,6 +45,10 @@ class ContactOut(ORM):
     confidence: float
     usage_restrictions: str | None
     is_suppressed: bool
+    # Verified decision maker: the pages that prove them (never provider names); any contact: how many
+    # independent sources published the value.
+    proof_links: list[str] = []
+    sources_count: int | None = None
 
 
 class SourceOut(ORM):

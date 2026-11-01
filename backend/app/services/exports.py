@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Business, BusinessSource, Campaign, LeadAssessment, LeadNote, WorkspaceProfile
-from app.models.enums import ContactType
-from app.services.leads import LeadFilters, best_contact, decorate, lead_query
+from app.models.enums import ContactType, VerificationStatus
+from app.services.leads import PUBLIC_PROOF_KINDS, LeadFilters, best_contact, decorate, lead_query
 from app.services.profile import offering_map, offering_name
 
 COLUMNS = [
@@ -26,6 +26,13 @@ COLUMNS = [
     "Phone",
     "Phone status",
     "WhatsApp",
+    "Decision maker",
+    "Decision maker role",
+    "Decision maker email",
+    "Decision maker phone",
+    "Decision maker WhatsApp",
+    "Decision maker LinkedIn",
+    "Decision maker proof",
     "Contact page",
     "Social links",
     "Source URLs",
@@ -41,6 +48,48 @@ COLUMNS = [
     "Demo record",
 ]
 MAX_EXPORT = 10_000
+
+
+def decision_maker_cells(contacts: list) -> list[str]:
+    """The verified decision maker (never an unproven name): name, role, their own channels and proof pages."""
+    people = [
+        c
+        for c in contacts
+        if c.type == ContactType.PERSON and c.verification_status == VerificationStatus.VERIFIED and c.person_name
+    ]
+    if not people:
+        return [""] * 7
+    top = max(people, key=lambda c: c.confidence)
+
+    def own(ctype: ContactType) -> str:
+        found = [
+            c
+            for c in contacts
+            if c.type == ctype
+            and c.person_name == top.person_name
+            and not c.is_suppressed
+            and c.verification_status != VerificationStatus.INVALID
+        ]
+        return max(found, key=lambda c: c.confidence).normalized_value if found else ""
+
+    linkedin = next(
+        (
+            c.value
+            for c in contacts
+            if c.type == ContactType.SOCIAL and c.person_name == top.person_name and "linkedin.com/in/" in c.value
+        ),
+        "",
+    )
+    proofs = [p["url"] for p in (top.evidence or {}).get("proofs", []) if p.get("kind") in PUBLIC_PROOF_KINDS]
+    return [
+        top.person_name or "",
+        top.person_role or "",
+        own(ContactType.EMAIL),
+        own(ContactType.PHONE),
+        own(ContactType.WHATSAPP),
+        linkedin,
+        " | ".join(proofs[:3]),
+    ]
 
 
 async def export_rows(db: AsyncSession, workspace_id: uuid.UUID, f: LeadFilters) -> list[list]:
@@ -92,6 +141,7 @@ async def export_rows(db: AsyncSession, workspace_id: uuid.UUID, f: LeadFilters)
                 phone.normalized_value if phone else "",
                 phone.verification_status if phone else "",
                 wa.normalized_value if wa else "",
+                *decision_maker_cells(contacts),
                 page.value if page else "",
                 " | ".join(social),
                 " | ".join(source_urls.get(b.id, [])),

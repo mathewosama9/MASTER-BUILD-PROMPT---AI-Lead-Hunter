@@ -20,7 +20,10 @@ from app.research.enrichment.social_search import SearchHit
 def test_role_ranks_put_owners_above_managers_in_both_languages():
     assert role_rank("Founder & CEO") == 3 and role_rank("المؤسس") == 3 and role_rank("مالك العيادة") == 3
     assert role_rank("Medical Director") == 2 and role_rank("المدير الطبي") == 2
-    assert role_rank("Marketing Manager") == 1
+    assert role_rank("Branch Manager") == 1 and role_rank("Director") == 1
+    # Department heads run a function, not the business (they count only when the seller targets them).
+    assert role_rank("Marketing Manager") == 0 and role_rank("Art Director") == 0 and role_rank("Head of IT") == 0
+    assert role_rank("مدير المبيعات") == 0 and role_rank("Founder & Head of Marketing") == 3
     assert role_rank("Receptionist") == 0 and role_rank("أخصائي تقويم") == 0
 
 
@@ -113,7 +116,7 @@ async def test_search_linkedin_uses_brave_with_one_query():
 
 def test_merge_combines_sources_and_ranks_owner_first():
     people = [
-        DecisionMaker("Mona Ali", "Marketing Manager", "website", "u1", "e", 0.6),
+        DecisionMaker("Mona Ali", "Branch Manager", "website", "u1", "e", 0.6),
         DecisionMaker("Dr. Omar Khaled", "Director", "website", "u1", "e", 0.6),
         DecisionMaker("Omar Khaled", "Founder", "linkedin_search", "u2", "e", 0.55, linkedin_url="li"),
     ]
@@ -144,7 +147,9 @@ def brave_on(monkeypatch):
     monkeypatch.setattr(get_settings(), "brave_api_key", "k")
 
 
-async def _run(client, monkeypatch, team_html: str, *, named: bool = True) -> tuple[uuid.UUID, list[str]]:
+async def _run(
+    client, monkeypatch, team_html: str, *, named: bool = True, mx=None, pages=None, council=None
+) -> tuple[uuid.UUID, list[str]]:
     from app.core import safe_http
     from app.core.db import get_sessionmaker
     from app.research.pipeline import execute_campaign
@@ -156,10 +161,12 @@ async def _run(client, monkeypatch, team_html: str, *, named: bool = True) -> tu
         return True
 
     monkeypatch.setattr(safe_http.SafeFetcher, "_check", no_dns)
-    monkeypatch.setattr("app.research.pipeline.domain_accepts_mail", mx_ok)
+    monkeypatch.setattr("app.research.pipeline.domain_accepts_mail", mx or mx_ok)
     assert (await client.put("/api/v1/settings", json={"allow_named_contacts": named})).status_code == 200
 
     def site(request: httpx.Request) -> httpx.Response:
+        if pages and str(request.url) in pages:
+            return httpx.Response(200, text=pages[str(request.url)], headers={"content-type": "text/html"})
         if request.url.host != "smile-dental.sa":
             return httpx.Response(404)
         if request.url.path == "/":
@@ -192,7 +199,12 @@ async def _run(client, monkeypatch, team_html: str, *, named: bool = True) -> tu
     async with get_sessionmaker()() as s:
         run = await s.scalar(select(CampaignRun).where(CampaignRun.campaign_id == cid))
         await execute_campaign(
-            s, cid, run.id, site_transport=httpx.MockTransport(site), search_transport=httpx.MockTransport(brave)
+            s,
+            cid,
+            run.id,
+            site_transport=httpx.MockTransport(site),
+            search_transport=httpx.MockTransport(brave),
+            council_transport=httpx.MockTransport(council) if council else None,
         )
     return cid, queries
 
@@ -217,12 +229,119 @@ async def test_named_on_the_website_is_found_without_paid_lookups(client, dispat
     assert any(e.data.get("t") == "decision_makers_done" for e in events)
 
 
-async def test_unnamed_site_falls_back_to_linkedin_via_brave(client, dispatched, db, monkeypatch, brave_on):
+async def test_one_linkedin_result_alone_is_not_enough_to_deliver(client, dispatched, db, monkeypatch, brave_on):
     cid, queries = await _run(client, monkeypatch, TEAM_EMPTY)
-    assert await _people(db, cid) == [("Sara Al Harbi", "Founder", "linkedin_search")]
     assert "site:linkedin.com/in" in queries[0] and "(Owner OR" in queries[0]
-    # Her LinkedIn profile is already known, so it is not searched again.
-    assert not any(q.startswith('"Sara Al Harbi"') and "linkedin" in q for q in queries[1:])
+    # One search result is one source: not verified, so not delivered (and the run says so).
+    assert await _people(db, cid) == []
+    events = (await db.scalars(select(JobEvent).where(JobEvent.campaign_id == cid))).all()
+    assert any(e.data.get("t") == "decision_makers_rejected" for e in events)
+
+
+# A reachable business (it has a phone), so the research council is asked about it.
+TEAM_REACHABLE = '<html><body><h1>Our Team</h1><p>Call <a href="tel:+966114445566">011 444 5566</a></p></body></html>'
+PRESS = (
+    "<html><head><title>Riyadh clinics</title></head><body><p>Sara Al Harbi, founder of Smile Dental in Riyadh, "
+    "opened a second branch.</p></body></html>"
+)
+
+
+def _perplexity(people, citations):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.perplexity.ai"
+        import json as _json
+
+        text = _json.dumps({"people": people})
+        output = [
+            {"type": "search_results", "results": [{"url": u, "title": "t"} for u in citations]},
+            {"type": "message", "content": [{"type": "output_text", "text": text, "annotations": []}]},
+        ]
+        return httpx.Response(200, json={"output": output, "usage": {"cost": {"total_cost": 0.004}}})
+
+    return handler
+
+
+async def test_ai_research_plus_linkedin_proves_the_decision_maker(client, dispatched, db, monkeypatch, brave_on):
+    monkeypatch.setattr(get_settings(), "perplexity_api_key", "p")
+    sara = {"name": "Sara Al Harbi", "role": "Founder", "quote": "", "source_urls": ["https://press.example/smile"]}
+    cid, _ = await _run(
+        client,
+        monkeypatch,
+        TEAM_REACHABLE,
+        pages={"https://press.example/smile": PRESS},
+        council=_perplexity([sara], ["https://press.example/smile"]),
+    )
+    from app.models import CampaignLead
+
+    biz_ids = select(CampaignLead.business_id).where(CampaignLead.campaign_id == cid)
+    person = await db.scalar(
+        select(BusinessContact).where(BusinessContact.business_id.in_(biz_ids), BusinessContact.type == "person")
+    )
+    assert person is not None and person.person_name == "Sara Al Harbi"
+    assert person.verification_status == "verified"
+    proofs = {p["url"] for p in person.evidence["proofs"]}
+    assert proofs == {"https://www.linkedin.com/in/sara", "https://press.example/smile"}
+    assert person.evidence["sources_count"] == 2
+
+    # The customer sees only verified people; a stale unproven one (earlier runs) is hidden, and a channel
+    # saved under that name is shown as a plain business contact.
+    for row in (
+        BusinessContact(
+            business_id=person.business_id,
+            type="person",
+            value="Ali Omar",
+            normalized_value="person:aliomar",
+            person_name="Ali Omar",
+            person_role="CEO",
+            source_provider="website",
+            verification_status="discovered",
+        ),
+        BusinessContact(
+            business_id=person.business_id,
+            type="email",
+            value="ali@smile-dental.sa",
+            subtype="decision_maker",
+            normalized_value="ali@smile-dental.sa",
+            person_name="Ali Omar",
+            person_role="CEO",
+            source_provider="website",
+        ),
+    ):
+        db.add(row)
+    await db.commit()
+    lead = (await client.get(f"/api/v1/leads/{person.business_id}")).json()
+    people = [c for c in lead["contacts"] if c["type"] == "person"]
+    assert [c["person_name"] for c in people] == ["Sara Al Harbi"]
+    assert set(people[0]["proof_links"]) == proofs and people[0]["sources_count"] == 2
+    ali = next(c for c in lead["contacts"] if c["value"] == "ali@smile-dental.sa")
+    assert ali["person_name"] is None and ali["subtype"] is None
+
+    # Exports carry the verified decision maker (and never the unproven one).
+    import csv
+    import io
+
+    export = await client.get(f"/api/v1/exports/campaigns/{cid}", params={"format": "csv"})
+    rows = list(csv.DictReader(io.StringIO(export.content.decode("utf-8-sig"))))
+    row = next(r for r in rows if r["Company"])
+    assert row["Decision maker"] == "Sara Al Harbi" and row["Decision maker role"] == "Founder"
+    assert row["Decision maker LinkedIn"] == "https://www.linkedin.com/in/sara"
+    assert "https://press.example/smile" in row["Decision maker proof"]
+    assert "Ali Omar" not in export.content.decode("utf-8-sig")
+
+
+async def test_a_name_only_the_ai_gives_is_never_delivered(client, dispatched, db, monkeypatch):
+    """No page we read names her with the business: an AI answer alone is not proof."""
+    monkeypatch.setattr(get_settings(), "perplexity_api_key", "p")
+    ghost = {"name": "Layla Hassan", "role": "Owner", "quote": "", "source_urls": ["https://invented.example/x"]}
+    asked = []
+
+    def council(request):
+        asked.append(request.url.host)
+        return _perplexity([ghost], [])(request)
+
+    cid, _ = await _run(client, monkeypatch, TEAM_REACHABLE, council=council)
+    assert asked == ["api.perplexity.ai"]
+    assert await _people(db, cid) == []
 
 
 async def test_decision_makers_are_always_on_whatever_the_old_setting(client, dispatched, db, monkeypatch, brave_on):
@@ -246,15 +365,20 @@ def hunter_calls(monkeypatch):
         calls.append(f"finder:{first} {last}@{domain}")
         return {"email": "omar.khaled@smile-dental.sa", "score": 91, "sources": [{"uri": "https://x.sa/press"}]}
 
+    async def fake_verify(self, email):
+        calls.append(f"verify:{email}")
+        return {"status": "valid"}
+
     monkeypatch.setattr("app.research.pipeline.HunterClient.domain_search", fake_domain_search)
     monkeypatch.setattr("app.research.providers.hunter.HunterClient.email_finder", fake_email_finder)
+    monkeypatch.setattr("app.research.providers.hunter.HunterClient.verify", fake_verify)
     return calls
 
 
 async def test_paid_lookups_only_fill_what_free_sources_missed(client, dispatched, db, monkeypatch, hunter_calls):
     cid, _ = await _run(client, monkeypatch, TEAM_NAMED)
     # Named for free, but no direct channel: only Hunter's Email Finder runs for him (no domain search).
-    assert hunter_calls == ["finder:Omar Khaled@smile-dental.sa"]
+    assert hunter_calls == ["finder:Omar Khaled@smile-dental.sa", "verify:omar.khaled@smile-dental.sa"]
     rows = await _channels(db, cid)
     assert ("email", "omar.khaled@smile-dental.sa", "Dr. Omar Khaled", "hunter") in rows
     hunter_calls.clear()
@@ -294,3 +418,81 @@ async def _channels(db, cid):
     return [
         (c.type, c.normalized_value if c.type != "social" else c.value, c.person_name, c.source_provider) for c in rows
     ]
+
+
+async def test_mail_check_never_touches_the_decision_maker_record(client, dispatched, db, monkeypatch):
+    """A PERSON row's value is "person:<key>"; looking that up as a mail domain used to mark the person invalid."""
+    looked_up: list[str] = []
+
+    async def strict_mx(domain, cache):
+        looked_up.append(domain)
+        return "." in domain  # like real DNS: "person:omarkhaled" has no mail server
+
+    cid, _ = await _run(client, monkeypatch, TEAM_NAMED, mx=strict_mx)
+    from app.models import CampaignLead
+
+    biz_ids = select(CampaignLead.business_id).where(CampaignLead.campaign_id == cid)
+    person = await db.scalar(
+        select(BusinessContact).where(BusinessContact.business_id.in_(biz_ids), BusinessContact.type == "person")
+    )
+    assert person is not None and person.verification_status != "invalid"
+    assert not any(d.startswith("person:") for d in looked_up)
+
+
+# ------------------------------------------------------------------------------ wrong people are rejected
+
+
+def test_testimonials_and_client_quotes_are_not_the_business_people():
+    from app.research.enrichment.decision_makers import from_cards
+
+    html = """<section class="team"><div><h3>Dr. Omar Khaled</h3><p>Founder &amp; CEO</p></div></section>
+      <section class="testimonials"><div><h4>John Smith</h4><p>CEO</p></div></section>
+      <div id="our-clients"><h4>Laila Hassan</h4><p>Owner</p></div>
+      <blockquote><h4>Sami Fares</h4><p>General Manager</p></blockquote>
+      <div><h4>Nadia Ali</h4><p>CEO at Bright Teeth</p></div>"""
+    found = {d.name for d in from_cards(html, "u", (), ("Smile Dental", "smile-dental.sa"))}
+    assert found == {"Dr. Omar Khaled"}
+
+
+def test_text_drops_people_written_as_working_for_another_company():
+    text = (
+        "Great service! – Mark Lee, CEO of Acme Logistics. Our founder: Sara Ali. Omar Khaled - Founder of Smile Dental"
+    )
+    found = {d.name for d in from_text(text, "u", "website", business_names=("Smile Dental Clinic",))}
+    assert found == {"Sara Ali", "Omar Khaled"}
+
+
+def test_names_lose_trailing_business_words_instead_of_being_dropped():
+    assert clean_name("Sara Ali Dental Clinic") == "Sara Ali"
+    assert clean_name("Omar Khaled Riyadh") == "Omar Khaled"
+
+
+def test_one_shared_word_is_not_the_same_company():
+    from app.research.enrichment.decision_makers import company_anchor
+
+    assert company_anchor("CEO - Smile Dental", "Smile Dental Clinic")
+    assert not company_anchor("CEO - Smile Logistics", "Smile Dental Clinic")  # "smile" alone used to pass
+    assert company_anchor("Founder at smile-dental.sa", "Smile Dental Clinic", domain="smile-dental.sa")
+    assert company_anchor("مدير عيادة النور", "عيادة النور")
+    namesake = SearchHit("https://linkedin.com/in/o", "Omar Khaled - CEO - Smile Group | LinkedIn", "")
+    assert from_linkedin_hit(namesake, "Smile Dental Clinic") is None
+
+
+def test_former_roles_and_other_markets_are_rejected():
+    from app.research.geo import country_place
+
+    former = SearchHit("https://linkedin.com/in/o", "Omar Khaled - Former CEO - Smile Dental | LinkedIn", "")
+    assert from_linkedin_hit(former, "Smile Dental") is None
+    ex = SearchHit("https://linkedin.com/in/o", "Omar Khaled - Founder - Smile Dental | LinkedIn", "Cairo, Egypt")
+    assert from_linkedin_hit(ex, "Smile Dental", place=country_place("SA")) is None
+    here = SearchHit("https://linkedin.com/in/o", "Omar Khaled - Founder - Smile Dental | LinkedIn", "Riyadh, Saudi")
+    assert from_linkedin_hit(here, "Smile Dental", place=country_place("SA")) is not None
+
+
+def test_the_business_main_line_is_never_the_persons_direct_phone():
+    from app.research.enrichment.decision_makers import contacts_in_snippet
+
+    dm = DecisionMaker("Omar Khaled", "Founder", "website", "u", "e", 0.5)
+    hit = SearchHit("https://instagram.com/omar", "Omar Khaled", "Book: +966 11 444 5566 · direct +966 50 111 2233")
+    contacts_in_snippet(hit, dm, "SA", "smile-dental.sa", shared={"+966114445566"})
+    assert dm.phone == "+966501112233"

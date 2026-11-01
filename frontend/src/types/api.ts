@@ -142,6 +142,10 @@ export interface Contact {
   confidence: number;
   usage_restrictions: string | null;
   is_suppressed: boolean;
+  /** Verified decision maker: pages that prove them. */
+  proof_links?: string[];
+  /** Independent sources behind the value (decision maker: proof sites; contact: publishers). */
+  sources_count?: number | null;
 }
 
 export interface Assessment {

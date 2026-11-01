@@ -44,6 +44,9 @@ const SOURCE_GROUP: Record<string, keyof Dictionary["sourceGroups"]> = {
   deepseek: "ai",
   anthropic: "ai",
   openai: "ai",
+  perplexity: "ai",
+  gemini: "ai",
+  ai_research: "ai",
 };
 
 function sourceName(t: Dictionary, key: string): string {

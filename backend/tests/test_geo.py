@@ -46,7 +46,8 @@ async def test_city_is_located_once_then_cached(monkeypatch):
     place = await geo.locate("OM", "Nizwa", transport=httpx.MockTransport(nominatim))
     again = await geo.locate("OM", "Nizwa", transport=httpx.MockTransport(nominatim))
     assert place.exact and (place.lat, place.lon) == (22.9333, 57.5333) and place.timezone == "Asia/Muscat"
-    assert again == place and calls == ["Nizwa"] and stored == {"OM:nizwa": (22.9333, 57.5333)}
+    assert again == place and calls == ["Nizwa"] and list(stored) == ["OM:nizwa"]
+    assert (stored["OM:nizwa"]["lat"], stored["OM:nizwa"]["lon"]) == (22.9333, 57.5333)
 
 
 async def test_unknown_place_falls_back_to_the_country(monkeypatch):

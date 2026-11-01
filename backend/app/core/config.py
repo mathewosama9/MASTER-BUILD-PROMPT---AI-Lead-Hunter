@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-flash"
     deepseek_base_url: str = "https://api.deepseek.com"
     ai_max_tokens: int = 16000
+    # AI research council: web-searching models asked who runs a business (answers are only leads; a person is
+    # delivered after enrichment/verify_people.py proves them on pages fetched by us). Model ids change often:
+    # check each provider's model list and override here.
+    perplexity_api_key: str | None = None
+    perplexity_model: str = "openai/gpt-5.6-luna"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.8-flash"
+    openai_search_model: str = "gpt-5.5"
+    ai_council_daily_limit: int = 300  # businesses per workspace per day
+    ai_council_cache_days: int = 30
     brave_api_key: str | None = None
     hunter_api_key: str | None = None
     apollo_api_key: str | None = None
@@ -79,6 +89,9 @@ class Settings(BaseSettings):
         "https://overpass.kumi.systems/api/interpreter"
     )
     osm_city_radius_km: float = 25.0
+    # Location check for places OSM knows only as a point (no boundary): businesses within this radius count as
+    # inside. Wide enough for a big city (Riyadh, Cairo); places with a boundary use the boundary instead.
+    city_match_radius_km: float = 35.0
     osm_nominatim_url: str = "https://nominatim.openstreetmap.org"
     # Optional real contact address added to the User-Agent (placeholder addresses get blocked by Nominatim).
     osm_contact_email: str = ""
@@ -130,6 +143,10 @@ class Settings(BaseSettings):
     # DeepSeek pricing estimate (USD per million tokens); check the DeepSeek pricing page and adjust.
     cost_deepseek_input_per_mtok: float = 0.30
     cost_deepseek_output_per_mtok: float = 1.20
+    # Per-call estimates for the research council when a provider reports no cost (search fees included).
+    cost_perplexity_per_call: float = 0.01
+    cost_gemini_per_call: float = 0.02
+    cost_openai_search_per_call: float = 0.03
 
     # Outgoing email (password reset, email confirmation). Unset host: emails are not sent; outside production
     # their text, links included, goes to the API log so local sign-ups can still be confirmed.

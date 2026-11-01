@@ -64,6 +64,24 @@ INTEGRATIONS: dict[str, ProviderInfo] = {
         ["api_key"],
         "https://api-docs.deepseek.com",
     ),
+    "perplexity": ProviderInfo(
+        "perplexity",
+        "Perplexity",
+        "ai",
+        "Research council: web-searching model asked who runs each business, with its sources. Its answers are "
+        "checked against pages the platform fetches itself before anyone is delivered.",
+        ["api_key"],
+        "https://docs.perplexity.ai",
+    ),
+    "gemini": ProviderInfo(
+        "gemini",
+        "Google Gemini",
+        "ai",
+        "Research council: Gemini with Grounding with Google Search, strong on local markets; answers are verified "
+        "before delivery.",
+        ["api_key"],
+        "https://ai.google.dev/gemini-api/docs/google-search",
+    ),
     "apollo": ProviderInfo(
         "apollo",
         "Apollo.io",
@@ -116,6 +134,8 @@ ENV_CREDENTIALS: dict[str, dict[str, str]] = {
     "anthropic": {"api_key": "anthropic_api_key"},
     "openai": {"api_key": "openai_api_key"},
     "deepseek": {"api_key": "deepseek_api_key"},
+    "perplexity": {"api_key": "perplexity_api_key"},
+    "gemini": {"api_key": "gemini_api_key"},
     "firecrawl": {"api_key": "firecrawl_api_key"},
     "telegram": {"bot_token": "telegram_bot_token"},
     "google_sheets": {"credentials_json": "google_sheets_credentials_json"},

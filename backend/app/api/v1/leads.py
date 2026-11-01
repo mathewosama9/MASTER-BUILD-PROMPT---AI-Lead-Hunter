@@ -66,7 +66,7 @@ from app.schemas.lead import (
 from app.services import campaigns as campaign_svc
 from app.services import credits as credit_svc
 from app.services import providers as provider_svc
-from app.services.leads import LeadFilters, get_business, paged_leads
+from app.services.leads import LeadFilters, delivered_contacts, get_business, paged_leads
 from app.services.profile import get_profile, offering_map, offering_name
 from app.services.suppression import (
     apply_suppression,
@@ -374,7 +374,7 @@ async def lead_detail(lead_id: uuid.UUID, p: CurrentPrincipal, db: DB) -> LeadDe
     sets = await suppression_sets(db, p.workspace_id)
     return LeadDetail(
         business={c.name: getattr(b, c.name) for c in Business.__table__.columns},
-        contacts=[ContactOut.model_validate(c) for c in contacts],
+        contacts=delivered_contacts(contacts),
         sources=[SourceOut.model_validate(s) for s in sources],
         evidence=[EvidenceOut.model_validate(e) for e in evidence],
         assessment=AssessmentOut.model_validate(assessments[0]) if assessments else None,
@@ -512,6 +512,7 @@ async def generate_pitch(lead_id: uuid.UUID, body: PitchIn, p: CurrentPrincipal,
         .where(
             BusinessContact.business_id == b.id,
             BusinessContact.type == ContactType.PERSON,
+            BusinessContact.verification_status == VerificationStatus.VERIFIED,  # never pitch an unproven name
             BusinessContact.is_suppressed.is_(False),
         )
         .order_by(BusinessContact.confidence.desc())
