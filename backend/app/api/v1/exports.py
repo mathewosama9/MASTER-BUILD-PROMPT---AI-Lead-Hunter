@@ -1,5 +1,7 @@
+import re
 import uuid
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
@@ -18,6 +20,12 @@ router = APIRouter(prefix="/exports", tags=["exports"])
 
 def _filename(prefix: str, ext: str) -> str:
     return f"{prefix}-{datetime.now(UTC).strftime('%Y%m%d-%H%M')}.{ext}"
+
+
+def _disposition(name: str) -> str:
+    """Headers are Latin-1 only: an ASCII fallback plus the real (e.g. Arabic) name as RFC 5987 filename*."""
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "export"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
 
 
 @router.get("/leads")
@@ -46,12 +54,12 @@ async def export_leads(
         return Response(
             to_xlsx(rows),
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{_filename("leads", "xlsx")}"'},
+            headers={"Content-Disposition": _disposition(_filename("leads", "xlsx"))},
         )
     return Response(
         to_csv(rows),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{_filename("leads", "csv")}"'},
+        headers={"Content-Disposition": _disposition(_filename("leads", "csv"))},
     )
 
 
@@ -67,17 +75,17 @@ async def export_campaign(
     rows = await export_rows(db, p.workspace_id, LeadFilters(campaign_id=c.id, qualified_only=qualified_only or None))
     await audit(db, p, "export.campaign", "campaign", c.id, {"format": format, "rows": len(rows)})
     await db.commit()
-    slug = "".join(ch if ch.isalnum() else "-" for ch in c.name.lower())[:40] or "campaign"
+    slug = re.sub(r"[^\w]+", "-", c.name.lower()).strip("-")[:40] or "campaign"
     if format == "csv":
         return Response(
             to_csv(rows),
             media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{_filename(slug, "csv")}"'},
+            headers={"Content-Disposition": _disposition(_filename(slug, "csv"))},
         )
     return Response(
         to_xlsx(rows, campaign_summary(c)),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{_filename(slug, "xlsx")}"'},
+        headers={"Content-Disposition": _disposition(_filename(slug, "xlsx"))},
     )
 
 

@@ -414,3 +414,21 @@ async def test_parse_spec_without_ai_uses_rule_based(client):
     spec = r.json()
     assert spec["parser"] == "rule_based"
     assert spec["industry"] == "dental_clinics" and spec["country"] == "SA" and spec["city"] == "Riyadh"
+
+
+async def test_export_with_arabic_campaign_name(client):
+    r = await client.post(
+        "/api/v1/campaigns",
+        json={
+            "name": "عيادات أسنان · الرياض",
+            "country": "SA",
+            "industry": "dental_clinics",
+            "sources": [{"provider_key": "demo"}],
+        },
+    )
+    cid = r.json()["id"]
+    for fmt in ("csv", "xlsx"):
+        res = await client.get(f"/api/v1/exports/campaigns/{cid}", params={"format": fmt})
+        assert res.status_code == 200, res.text
+        disposition = res.headers["content-disposition"]
+        assert "filename*=UTF-8''" in disposition and "%D8%B9" in disposition  # "ع" percent-encoded

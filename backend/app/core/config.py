@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     demo_mode: bool = True
 
     database_url: str = "postgresql+asyncpg://leadhunter:leadhunter@localhost:5432/leadhunter"
+    # Connections each process keeps open (SQLAlchemy pool_size / max_overflow); lower on small hosts.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
@@ -86,6 +89,8 @@ class Settings(BaseSettings):
     # Limits: no account login, no captcha solving, no proxy rotation; a block stops the source cleanly.
     scraping_enabled: bool = False
     scraper_headless: bool = True
+    # Extra Chromium flags, comma-separated in env, e.g. "--single-process,--no-zygote" where threads are capped.
+    scraper_browser_args: Annotated[list[str], NoDecode] = []
     scraper_max_places_per_campaign: int = 60
     scraper_delay_min: float = 2.0
     scraper_delay_max: float = 5.0
@@ -146,7 +151,7 @@ class Settings(BaseSettings):
     preview_limit_per_hour: int = 120
     data_retention_days: int = 365
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "scraper_browser_args", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:
         if isinstance(v, str) and not v.startswith("["):

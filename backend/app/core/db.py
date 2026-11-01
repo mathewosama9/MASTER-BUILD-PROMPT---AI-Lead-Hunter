@@ -14,7 +14,11 @@ def get_engine() -> AsyncEngine:
     global _engine, _sessionmaker
     if _engine is None:
         settings = get_settings()
-        kwargs: dict = {"pool_pre_ping": True}
+        kwargs: dict = {
+            "pool_pre_ping": True,
+            "pool_size": settings.db_pool_size,
+            "max_overflow": settings.db_max_overflow,
+        }
         if settings.database_url.startswith("sqlite"):
             kwargs = {}
         _engine = create_async_engine(settings.database_url, **kwargs)

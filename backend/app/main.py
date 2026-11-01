@@ -46,7 +46,8 @@ def create_app() -> FastAPI:
     limiter = Limiter(
         key_func=get_remote_address,
         default_limits=[s.rate_limit_default],
-        storage_uri=s.redis_url if s.environment != "test" else "memory://",
+        # `limits` spells a Unix-socket Redis "redis+unix://" (redis-py's "unix://").
+        storage_uri=s.redis_url.replace("unix://", "redis+unix://", 1) if s.environment != "test" else "memory://",
         enabled=s.environment != "test",
     )
     app.state.limiter = limiter

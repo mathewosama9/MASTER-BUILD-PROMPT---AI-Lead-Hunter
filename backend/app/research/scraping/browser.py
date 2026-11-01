@@ -64,7 +64,7 @@ class BrowserSession:
         s = get_settings()
         self._pw = await async_playwright().start()
         try:
-            self._browser = await self._pw.chromium.launch(headless=s.scraper_headless)
+            self._browser = await self._pw.chromium.launch(headless=s.scraper_headless, args=s.scraper_browser_args)
         except Exception as exc:  # noqa: BLE001 - missing browser binary etc.
             await self._pw.stop()
             raise BrowserUnavailable(f"Chromium could not start: {exc}") from exc

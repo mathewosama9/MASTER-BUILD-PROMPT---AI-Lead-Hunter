@@ -98,8 +98,12 @@ async def _run_webhook(bot, dp) -> None:
     setup_application(app, dp, bot=bot)
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, s.webhook_host, s.webhook_port).start()
-    log.info("Webhook listening on %s:%s%s", s.webhook_host, s.webhook_port, s.telegram_webhook_path)
+    if s.webhook_socket:
+        await web.UnixSite(runner, s.webhook_socket).start()
+        log.info("Webhook listening on %s%s", s.webhook_socket, s.telegram_webhook_path)
+    else:
+        await web.TCPSite(runner, s.webhook_host, s.webhook_port).start()
+        log.info("Webhook listening on %s:%s%s", s.webhook_host, s.webhook_port, s.telegram_webhook_path)
     await asyncio.Event().wait()
 
 

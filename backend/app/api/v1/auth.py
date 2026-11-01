@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Request, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CSRF_COOKIE, DB, SESSION_COOKIE, CurrentPrincipal, audit, require_role
@@ -18,8 +18,8 @@ from app.core.security import (
     password_fingerprint,
     verify_password,
 )
-from app.models import AuditLog, User, Workspace, WorkspaceMember
-from app.models.enums import Role
+from app.models import AuditLog, TelegramAccount, User, Workspace, WorkspaceMember
+from app.models.enums import Role, TelegramLinkStatus
 from app.schemas.auth import (
     ForgotPasswordIn,
     LoginIn,
@@ -169,6 +169,13 @@ async def reset_password(body: ResetPasswordIn, request: Request, db: DB) -> Mes
     ):
         raise AppError(_BAD_RESET, code="invalid_token")
     user.password_hash = hash_password(body.password)  # also signs out every existing session
+    # Telegram links authenticate without the session cookie, so they are revoked too: whoever linked a chat
+    # before the reset (e.g. someone who signed up with this email first) loses access with the old password.
+    await db.execute(
+        update(TelegramAccount)
+        .where(TelegramAccount.user_id == user.id, TelegramAccount.status != TelegramLinkStatus.REVOKED)
+        .values(status=TelegramLinkStatus.REVOKED)
+    )
     await accounts.mark_verified(db, user)  # the reset link proves the user reads this inbox
     db.add(AuditLog(user_id=user.id, action="auth.password_reset", ip=_ip(request), via="web"))
     await db.commit()

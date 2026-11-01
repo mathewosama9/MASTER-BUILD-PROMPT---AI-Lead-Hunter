@@ -207,3 +207,30 @@ async def test_emails_are_logged_when_smtp_is_not_configured(caplog):
 
     assert await send_email("x@example.com", "Hello", "Link: http://localhost:3000/verify-email?token=abc") is False
     assert "verify-email?token=abc" in caplog.text
+
+
+async def test_password_reset_revokes_telegram_links(anon, db, outbox):
+    from app.models import TelegramAccount
+    from app.models.enums import TelegramLinkStatus
+
+    body = await signup(anon)
+    user = await db.scalar(select(User).where(User.email == body["email"]))
+    db.add(
+        TelegramAccount(
+            telegram_user_id=777001,
+            user_id=user.id,
+            workspace_id=uuid.UUID(body["workspace_id"]),
+            chat_id=777001,
+            status=TelegramLinkStatus.APPROVED,
+        )
+    )
+    await db.commit()
+    outbox.clear()
+    await forgot(anon, body["email"])
+    r = await anon.post(
+        "/api/v1/auth/password/reset", json={"token": link_token(outbox[0]), "password": "a-brand-new-password"}
+    )
+    assert r.status_code == 200
+    account = await db.scalar(select(TelegramAccount).where(TelegramAccount.telegram_user_id == 777001))
+    await db.refresh(account)
+    assert account.status == TelegramLinkStatus.REVOKED

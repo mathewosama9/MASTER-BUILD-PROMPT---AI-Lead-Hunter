@@ -23,6 +23,8 @@ class BackendClient:
         s = get_settings()
         self.base_url = (base_url or s.api_base_url).rstrip("/")
         self.service_token = service_token or s.telegram_service_token
+        if transport is None and s.api_socket:
+            transport = httpx.AsyncHTTPTransport(uds=s.api_socket)
         self._client = httpx.AsyncClient(timeout=30.0, transport=transport)
         self._meta: tuple[float, dict] | None = None
 
