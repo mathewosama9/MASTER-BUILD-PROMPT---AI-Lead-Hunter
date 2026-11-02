@@ -225,8 +225,15 @@ STRINGS: dict[str, dict[str, str]] = {
     "bal_rule": {"en": "1 credit = 1 new business with a phone, WhatsApp or email.",
                  "ar": "1 كريدت = شركة جديدة ليها تليفون أو واتساب أو إيميل."},
     "pick_package": {"en": "💳 <b>Choose a package</b>", "ar": "💳 <b>اختار الباقة</b>"},
-    "package_btn": {"en": "{name} · {credits} credits · {price} {currency}",
-                    "ar": "{name} · {credits} كريدت · {price} {currency}"},
+    "package_btn": {"en": "{name} · {credits} credits · {price}",
+                    "ar": "{name} · {credits} كريدت · {price}"},
+    "pay_on_web": {"en": "💳 <b>{name}</b> — {credits} credits for <b>{price}</b>\n\n"
+                         "Pay securely with PayPal (card or PayPal balance). The credits are added instantly.",
+                   "ar": "💳 <b>{name}</b> — {credits} كريدت بـ <b>{price}</b>\n\n"
+                         "ادفع بأمان عبر PayPal (بالكارت أو رصيد PayPal). الرصيد بيتضاف فوراً."},
+    "pay_on_web_no_link": {"en": "Open 💳 Credits in the dashboard to pay.",
+                           "ar": "افتح صفحة 💳 النقاط في لوحة التحكم عشان تدفع."},
+    "btn_pay_paypal": {"en": "💳 Pay with PayPal", "ar": "💳 ادفع بـ PayPal"},
     "no_packages": {"en": "No packages are available right now. Contact support from the dashboard.",
                     "ar": "مفيش باقات متاحة دلوقتي. كلّم الدعم من لوحة التحكم."},
     "pick_method": {"en": "💳 <b>{name}</b> — {credits} credits for <b>{price} {currency}</b>\n\n"

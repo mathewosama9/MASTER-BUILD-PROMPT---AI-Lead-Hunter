@@ -117,7 +117,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "email_verification": False,
     "min_score": 50,
     "max_budget_usd": 5.0,
-    "max_runtime_minutes": 30,
+    "max_runtime_minutes": None,  # None: run until done (the admin can set a cap in Admin → Settings)
     "concurrency": 4,
     "exclude_duplicates": False,
     # Relevance gate (enrichment/relevance.py): drop closed places, places far from the city and other kinds of
@@ -304,7 +304,8 @@ class CampaignPipeline:
         if status == CampaignStatus.PAUSED:
             raise StopRun("Paused by user", CampaignStatus.PAUSED, "paused")
         elapsed_min = (time.monotonic() - self.started) / 60 + float(self.checkpoint.get("elapsed_minutes", 0))
-        if elapsed_min > float(self.settings["max_runtime_minutes"]):
+        cap = self.settings.get("max_runtime_minutes")
+        if cap and elapsed_min > float(cap):
             raise StopRun("Maximum runtime reached", CampaignStatus.PARTIALLY_COMPLETED, "max_runtime")
         await self.check_budget()
 

@@ -236,7 +236,8 @@ export interface Provider {
   status: "connected" | "requires_api_key" | "requires_permission" | "unsupported" | "disabled" | "rate_limited" | "error";
   status_detail: string | null;
   enabled: boolean;
-  credential_source: "env" | "workspace" | null;
+  credential_source: "env" | "workspace" | "platform" | null;
+  has_env_key?: boolean;
   credentials_masked: Record<string, string | null>;
   settings: Record<string, unknown>;
   last_tested_at: string | null;
@@ -357,10 +358,11 @@ export interface BillingSummary {
   pending_topups: number;
   payment_instructions_ar: string;
   payment_instructions_en: string;
+  paypal_enabled: boolean;
 }
 
 export type CreditKind = "trial_grant" | "purchase" | "manual_adjust" | "campaign_charge" | "refund";
-export type PaymentMethod = "instapay" | "bank_transfer" | "vodafone_cash";
+export type PaymentMethod = "instapay" | "bank_transfer" | "vodafone_cash" | "paypal";
 export type TopUpStatus = "pending" | "approved" | "rejected";
 
 export interface CreditTransaction {

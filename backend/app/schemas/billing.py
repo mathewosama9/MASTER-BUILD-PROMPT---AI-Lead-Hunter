@@ -22,6 +22,7 @@ class BillingSummary(BaseModel):
     pending_topups: int
     payment_instructions_ar: str
     payment_instructions_en: str
+    paypal_enabled: bool = False  # the store's PayPal account is connected
 
 
 class TransactionOut(ORM):
@@ -67,3 +68,16 @@ class TopUpOut(ORM):
     reason: str | None
     created_at: datetime
     reviewed_at: datetime | None
+
+
+class PayPalOrderIn(BaseModel):
+    package_id: uuid.UUID
+
+
+class PayPalOrderOut(BaseModel):
+    order_id: str
+    approve_url: str
+
+
+class PayPalOrderRef(BaseModel):
+    order_id: str = Field(min_length=1, max_length=64)

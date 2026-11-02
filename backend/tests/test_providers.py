@@ -206,3 +206,30 @@ async def test_monthly_usage_counts_ai_analyses_and_pitches(db, owner):
     await db.flush()
     usage = await svc.monthly_usage(db, ws)
     assert usage["deepseek"] == {"requests": 4, "cost_usd": 0.013}
+
+
+async def test_admin_key_replaces_the_env_key_and_deleting_it_falls_back(app, platform_admin, monkeypatch):
+    from app.core.config import get_settings
+    from tests.conftest import login
+
+    monkeypatch.setattr(get_settings(), "hunter_api_key", "env-key-0000000000")
+    c = await login(app, platform_admin[0].email)
+
+    def hunter(rows):
+        return next(x for x in rows if x["key"] == "hunter")
+
+    assert hunter((await c.get("/api/v1/providers")).json())["credential_source"] == "env"
+    r = await c.put("/api/v1/providers/hunter", json={"credentials": {"api_key": "admin-key-1111111111"}})
+    assert hunter([r.json()])["credential_source"] == "platform" and r.json()["has_env_key"] is True
+    r = await c.put("/api/v1/providers/hunter", json={"credentials": {"api_key": ""}})
+    assert r.json()["credential_source"] == "env"
+    await c.aclose()
+
+
+async def test_connection_test_of_a_platform_key_records_no_workspace_usage(app, platform_admin):
+    from tests.conftest import login
+
+    c = await login(app, platform_admin[0].email)
+    r = await c.post("/api/v1/providers/osm/test")  # used to fail: usage logged with no workspace
+    assert r.status_code == 200, r.text
+    await c.aclose()

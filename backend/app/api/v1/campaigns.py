@@ -41,6 +41,26 @@ router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 SORTS = {"created_at": Campaign.created_at, "name": Campaign.name, "status": Campaign.status}
 
 
+def campaign_out(c: Campaign, superuser: bool) -> CampaignOut:
+    """Clients see their campaign, not the platform's internals (costs, research settings, provider errors)."""
+    out = CampaignOut.model_validate(c)
+    if superuser:
+        return out
+    return out.model_copy(
+        update={
+            "cost_discovery": 0.0,
+            "cost_ai": 0.0,
+            "settings": {"target_count": c.settings.get("target_count")},
+            "sources": [x.model_copy(update={"last_error": None}) for x in out.sources],
+        }
+    )
+
+
+def _managed(p: CurrentPrincipal, body: CampaignCreate) -> bool:
+    """Clients always run on the platform's research settings; so does an admin campaign that names no sources."""
+    return not p.user.is_superuser or not body.sources
+
+
 @router.get("", response_model=Page[CampaignOut])
 async def list_campaigns(
     p: CurrentPrincipal,
@@ -66,13 +86,16 @@ async def list_campaigns(
     col = SORTS.get(sort, Campaign.created_at)
     stmt = stmt.order_by(col.desc() if order == "desc" else col.asc()).offset((page - 1) * page_size).limit(page_size)
     items = (await db.scalars(stmt)).all()
-    return Page(items=[CampaignOut.model_validate(c) for c in items], total=total or 0, page=page, page_size=page_size)
+    su = p.user.is_superuser
+    return Page(items=[campaign_out(c, su) for c in items], total=total or 0, page=page, page_size=page_size)
 
 
 @router.post("", response_model=CampaignOut, status_code=201, dependencies=[require_role(Role.ANALYST)])
 async def create_campaign(body: CampaignCreate, p: CurrentPrincipal, db: DB, request: Request) -> CampaignOut:
     chat_id = p.telegram_account.chat_id if p.telegram_account else None
-    campaign = await svc.create_campaign(db, p.workspace_id, p.user.id, body, origin=p.via, telegram_chat_id=chat_id)
+    campaign = await svc.create_campaign(
+        db, p.workspace_id, p.user.id, body, origin=p.via, telegram_chat_id=chat_id, managed=_managed(p, body)
+    )
     await audit(
         db,
         p,
@@ -86,7 +109,7 @@ async def create_campaign(body: CampaignCreate, p: CurrentPrincipal, db: DB, req
     if body.start:
         await svc.start_campaign(db, campaign)
     await db.refresh(campaign)
-    return CampaignOut.model_validate(campaign)
+    return campaign_out(campaign, p.user.is_superuser)
 
 
 @router.post("/parse-spec", dependencies=[require_role(Role.ANALYST)])
@@ -125,6 +148,11 @@ async def import_preview(body: ImportPreviewIn, p: CurrentPrincipal) -> ImportPr
 @router.post("/estimate", response_model=EstimateOut)
 async def estimate(body: CampaignCreate, p: CurrentPrincipal, db: DB) -> EstimateOut:
     s = get_settings()
+    managed = _managed(p, body)
+    if managed and not body.is_demo:
+        own = [s for s in body.sources if s.provider_key in svc.USER_LIST_SOURCES]
+        sources, settings = await svc.managed_setup(db, p.workspace_id, body.settings.target_count)
+        body = body.model_copy(update={"sources": own or sources, "settings": settings})
     providers: dict[str, dict] = {}
     notes: list[str] = []
     requests = 0
@@ -157,6 +185,11 @@ async def estimate(body: CampaignCreate, p: CurrentPrincipal, db: DB) -> Estimat
         if not is_demo:  # the dashboard shows this translated, from credits_max and credit_balance
             per = (await credit_svc.platform_settings(db)).credits_per_contact
             credits_max = body.settings.max_companies * per
+    if not p.user.is_superuser:  # clients see credits only; providers, costs and caps are the platform's business
+        return EstimateOut(
+            providers={}, estimated_requests=0, estimated_cost_usd=None, notes=[], credits_max=credits_max,
+            credit_balance=balance,
+        )
     return EstimateOut(
         providers=providers,
         estimated_requests=requests,
@@ -169,7 +202,7 @@ async def estimate(body: CampaignCreate, p: CurrentPrincipal, db: DB) -> Estimat
 
 @router.get("/{campaign_id}", response_model=CampaignOut)
 async def get_campaign(campaign_id: uuid.UUID, p: CurrentPrincipal, db: DB) -> CampaignOut:
-    return CampaignOut.model_validate(await svc.get_campaign(db, p.workspace_id, campaign_id))
+    return campaign_out(await svc.get_campaign(db, p.workspace_id, campaign_id), p.user.is_superuser)
 
 
 @router.patch("/{campaign_id}", response_model=CampaignOut, dependencies=[require_role(Role.ANALYST)])
@@ -180,9 +213,15 @@ async def update_campaign(campaign_id: uuid.UUID, body: CampaignUpdate, p: Curre
     data = body.model_dump(exclude_none=True, exclude={"sources", "settings"})
     for k, v in data.items():
         setattr(c, k, v)
+    managed = not p.user.is_superuser
     if body.settings is not None:
-        c.settings = body.settings.model_dump()
-    if body.sources is not None:
+        if managed:  # only the lead count is the client's; the rest follows the platform settings
+            settings = (await svc.research_defaults(db)).research_settings(body.settings.target_count)
+            c.settings = settings.model_dump()
+            c.stats = {**(c.stats or {}), "target": settings.target_count}
+        else:
+            c.settings = body.settings.model_dump()
+    if body.sources is not None and not managed:
         c.sources = [
             CampaignSource(provider_key=s.provider_key, manual_urls=s.manual_urls)
             for s in body.sources
@@ -190,7 +229,7 @@ async def update_campaign(campaign_id: uuid.UUID, body: CampaignUpdate, p: Curre
         ]
     await db.commit()
     await db.refresh(c)
-    return CampaignOut.model_validate(c)
+    return campaign_out(c, p.user.is_superuser)
 
 
 @router.delete("/{campaign_id}", response_model=Message, dependencies=[require_role(Role.ANALYST)])
@@ -228,11 +267,11 @@ def _action(name: str):  # noqa: ANN202
         elif name == "retry":
             await svc.retry_failures(db, c)
         elif name == "duplicate":
-            c = await svc.duplicate_campaign(db, c, p.user.id)
+            c = await svc.duplicate_campaign(db, c, p.user.id, managed=not p.user.is_superuser)
         await audit(db, p, f"campaign.{name}", "campaign", c.id)
         await db.commit()
         await db.refresh(c)
-        return CampaignOut.model_validate(c)
+        return campaign_out(c, p.user.is_superuser)
 
     handler.__name__ = f"{name}_campaign"
     return handler
@@ -283,7 +322,8 @@ async def event_history(
 async def stream_events(campaign_id: uuid.UUID, p: CurrentPrincipal, db: DB, request: Request) -> EventSourceResponse:
     """Server-Sent Events: initial snapshot, then live events from Redis pub/sub, with heartbeats."""
     campaign = await svc.get_campaign(db, p.workspace_id, campaign_id)
-    snapshot = CampaignOut.model_validate(campaign).model_dump(mode="json")
+    su = p.user.is_superuser
+    snapshot = campaign_out(campaign, su).model_dump(mode="json")
 
     async def gen():  # noqa: ANN202
         yield {"event": "snapshot", "data": json.dumps(snapshot, ensure_ascii=False)}
@@ -311,7 +351,7 @@ async def stream_events(campaign_id: uuid.UUID, p: CurrentPrincipal, db: DB, req
                         async with get_sessionmaker()() as s2:
                             fresh = await s2.get(Campaign, campaign_id)
                             await s2.refresh(fresh, attribute_names=["sources"])
-                            yield {"event": "snapshot", "data": CampaignOut.model_validate(fresh).model_dump_json()}
+                            yield {"event": "snapshot", "data": campaign_out(fresh, su).model_dump_json()}
                 else:
                     idle += 1.0
                     if idle >= 15:

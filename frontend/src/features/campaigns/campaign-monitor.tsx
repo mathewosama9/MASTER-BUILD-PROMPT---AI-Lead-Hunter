@@ -58,9 +58,10 @@ export function CampaignMonitor({ id }: { id: string }) {
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={c.status} />
         {c.is_demo ? <DemoBadge /> : null}
-        <Badge tone="neutral">{t.monitor.origin}: {label(c.origin)}</Badge>
-        {s.ai_provider ? <Badge tone={s.ai_provider === "heuristic" ? "yellow" : "indigo"}>{t.monitor.analysis}: {source(s.ai_provider)}</Badge> : null}
-        {running ? (
+        {/* Origin, analysis engine and transport are platform internals: admins only. */}
+        {platformAdmin ? <Badge tone="neutral">{t.monitor.origin}: {label(c.origin)}</Badge> : null}
+        {platformAdmin && s.ai_provider ? <Badge tone={s.ai_provider === "heuristic" ? "yellow" : "indigo"}>{t.monitor.analysis}: {source(s.ai_provider)}</Badge> : null}
+        {running && platformAdmin ? (
           <Badge tone="blue">
             <Radio className="size-3" /> {transport === "sse" ? t.monitor.liveSse : t.monitor.livePolling}
           </Badge>
@@ -97,7 +98,9 @@ export function CampaignMonitor({ id }: { id: string }) {
               </span>
               <span className="tabular-nums">
                 {s.progress?.percent !== null && s.progress?.percent !== undefined
-                  ? `${s.progress.completed_units}/${s.progress.total_units} ${t.monitor.units} · ${s.progress.percent}%`
+                  ? platformAdmin
+                    ? `${s.progress.completed_units}/${s.progress.total_units} ${t.monitor.units} · ${s.progress.percent}%`
+                    : `${s.progress.percent}%`
                   : t.campaigns.indeterminate}
               </span>
             </div>
@@ -124,6 +127,8 @@ export function CampaignMonitor({ id }: { id: string }) {
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" /> {c.last_error}
             </p>
           ) : null}
+          {/* Per-source status and provider warnings are for platform admins (sources are set in Admin → Settings). */}
+          {platformAdmin ? (
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <p className="mb-2 text-xs font-medium">{t.campaigns.sources}</p>
@@ -153,6 +158,7 @@ export function CampaignMonitor({ id }: { id: string }) {
               </ul>
             </div>
           </div>
+          ) : null}
         </CardContent>
       </Card>
 

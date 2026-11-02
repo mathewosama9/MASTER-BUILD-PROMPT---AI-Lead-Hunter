@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.research import brave_keys
 from app.research.enrichment.contacts import social_profile_url
 from app.research.geo import Place
 
@@ -186,6 +187,7 @@ async def web_search(
     place: Place | None = None,
 ) -> list[SearchHit]:
     """Run one query through the official Brave Search API (the only search backend; it needs a key).
+    `brave_key` may hold several keys (comma/newline separated), rotated when one is rejected or limited.
     `country` is a Brave country code (catalog `brave_country`, "ALL" for markets Brave has no code for)."""
     params: dict = {"q": query, "count": count, "result_filter": "web"}
     if country:
@@ -193,16 +195,19 @@ async def web_search(
     if offset:
         params["offset"] = offset
     async with httpx.AsyncClient(timeout=15.0, transport=transport) as client:
-        resp = await client.get(
-            BRAVE_URL,
-            params=params,
-            headers={
-                "Accept": "application/json",
-                "X-Subscription-Token": brave_key,
-                **(place.brave_headers() if place else {}),  # search from inside the target market
-            },
+        resp = await brave_keys.get_with_rotation(
+            brave_key,
+            lambda key: client.get(
+                BRAVE_URL,
+                params=params,
+                headers={
+                    "Accept": "application/json",
+                    "X-Subscription-Token": key,
+                    **(place.brave_headers() if place else {}),  # search from inside the target market
+                },
+            ),
         )
-    if resp.status_code in (401, 402, 403, 429):
+    if resp.status_code in (401, 402, 403, 429) or (resp.status_code == 422 and "SUBSCRIPTION_TOKEN" in resp.text):
         raise SearchBlocked(f"Brave Search returned {resp.status_code}")
     resp.raise_for_status()
     results = (resp.json().get("web") or {}).get("results") or []

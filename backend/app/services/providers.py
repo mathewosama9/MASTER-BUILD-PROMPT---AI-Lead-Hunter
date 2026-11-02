@@ -57,15 +57,17 @@ async def record_outcome(
 async def credentials_for(
     db: AsyncSession, workspace_id: uuid.UUID | None, key: str
 ) -> tuple[dict[str, str], str | None]:
-    """Return (credentials, source) where source is 'env', 'workspace', 'platform' or None."""
-    env = env_credentials(key)
-    if env:
-        return env, "env"
+    """Return (credentials, source) where source is 'workspace', 'platform', 'env' or None.
+
+    A key saved from the admin dashboard wins over the server's env file, so the admin can replace it there."""
     cfg = await get_config(db, workspace_id, credential_key(key))
     if cfg and cfg.encrypted_credentials:
         raw = decrypt_secret(cfg.encrypted_credentials)
         if raw:
             return json.loads(raw), ("platform" if cfg.workspace_id is None else "workspace")
+    env = env_credentials(key)
+    if env:
+        return env, "env"
     return {}, None
 
 
@@ -111,7 +113,7 @@ async def mark_rate_limited(workspace_id: uuid.UUID, key: str, seconds: float) -
 
 
 async def build_context(
-    db: AsyncSession, workspace_id: uuid.UUID, key: str, campaign_id: uuid.UUID | None = None
+    db: AsyncSession, workspace_id: uuid.UUID | None, key: str, campaign_id: uuid.UUID | None = None
 ) -> ProviderContext:
     creds, _ = await credentials_for(db, workspace_id, key)
     cfg = await get_config(db, workspace_id, key)
@@ -121,6 +123,8 @@ async def build_context(
     async def record(
         provider_key: str, operation: str, units: int, cost: float, success: bool, status_code: int | None
     ) -> None:
+        if workspace_id is None:  # an admin's connection test: not billed to any workspace
+            return
         db.add(
             ProviderUsage(
                 workspace_id=workspace_id,
@@ -232,6 +236,7 @@ async def list_providers(db: AsyncSession, workspace_id: uuid.UUID | None, *, pu
                 "status_detail": state.detail,
                 "enabled": cfg.enabled if cfg else True,
                 "credential_source": source,
+                "has_env_key": bool(env_credentials(info.key)),  # deleting a saved key falls back to it
                 "credentials_masked": {k: mask_secret(v) for k, v in creds.items()},
                 "settings": (cfg.settings if cfg else {}) or {},
                 "last_tested_at": cfg.last_tested_at if cfg else None,

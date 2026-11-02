@@ -2,26 +2,24 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronLeft, ChevronRight, FlaskConical, Save, Sparkles, Wand2 } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Plus, Save, Sparkles, Wand2, X } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 
-import { ProviderStatusBadge } from "@/components/badges";
 import { PageHeader } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, Checkbox, Field, Input, Select, Switch, Textarea } from "@/components/ui/primitives";
+import { Card, CardContent, Field, Input, Select, Textarea } from "@/components/ui/primitives";
 import { ErrorState, LoadingState, Spinner } from "@/components/ui/states";
-import Link from "next/link";
 import { OutOfCredits } from "@/features/billing/out-of-credits";
-import { useBillingSummary, useMeta, usePlatformAdmin, useProfile, useProviders, useServiceName } from "@/hooks/queries";
+import { useBillingSummary, useMeta, usePlatformAdmin, useProfile, useServiceName } from "@/hooks/queries";
 import { useI18n } from "@/i18n/provider";
 import { api, ApiError } from "@/lib/api";
 import { cn, humanize } from "@/lib/utils";
-import type { Campaign, Provider } from "@/types/api";
+import type { Campaign, Profile } from "@/types/api";
 
-import { ImportUpload } from "./import-upload";
 import {
   campaignSchema,
   defaultCampaignValues,
@@ -31,7 +29,9 @@ import {
   type CampaignFormValues,
 } from "./schema";
 
-const SOURCE_ORDER = ["google_maps", "osm", "directories", "social_discovery", "import", "brave", "hunter", "x", "facebook", "manual", "demo"];
+const LAST_STEP = STEP_FIELDS.length - 1;
+const MAX_OFFERINGS = 12; // backend ProfileIn.offerings
+const EMPTY_SERVICE = { name: "", description: "" };
 
 interface Estimate {
   providers: Record<string, { status: string; detail: string | null }>;
@@ -43,17 +43,18 @@ interface Estimate {
 }
 
 export function CampaignWizard() {
-  const { t, locale, label, vmsg, source } = useI18n();
+  const { t, locale, vmsg } = useI18n();
   const router = useRouter();
   const qc = useQueryClient();
   const meta = useMeta();
-  const providers = useProviders();
   const platformAdmin = usePlatformAdmin();
   const { data: billing } = useBillingSummary();
   const profile = useProfile();
   const nameOf = useServiceName();
   const [step, setStep] = useState(0);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState(EMPTY_SERVICE);
 
   const form = useForm<CampaignFormInput, unknown, CampaignFormValues>({
     resolver: zodResolver(campaignSchema),
@@ -80,6 +81,27 @@ export function CampaignWizard() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // A new service is saved to the business profile (Settings → Business), then selected for this campaign.
+  const addService = useMutation({
+    mutationFn: () => {
+      const current = profile.data?.offerings ?? [];
+      return api<Profile>("/profile", {
+        method: "PUT",
+        body: { offerings: [...current, { name: draft.name.trim(), description: draft.description.trim(), keywords: [] }] },
+      });
+    },
+    onSuccess: (saved) => {
+      qc.setQueryData(["profile"], saved);
+      const known = new Set((profile.data?.offerings ?? []).map((o) => o.id));
+      const created = saved.offerings.find((o) => !known.has(o.id));
+      if (created) setValue("services", [...getValues("services"), created.id].slice(0, 10), { shouldValidate: true });
+      setDraft(EMPTY_SERVICE);
+      setAdding(false);
+      toast.success(t.wizard.serviceAdded);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const submit = useMutation({
     mutationFn: ({ v, start }: { v: CampaignFormValues; start: boolean }) =>
       api<Campaign>("/campaigns", { method: "POST", body: toApiPayload(v, start) }),
@@ -91,13 +113,11 @@ export function CampaignWizard() {
     onError: (e: Error) => toast.error(e instanceof ApiError ? e.message : String(e)),
   });
 
-  if (meta.isLoading || providers.isLoading) return <LoadingState rows={6} />;
-  if (meta.error || providers.error) return <ErrorState error={meta.error ?? providers.error} />;
+  if (meta.isLoading) return <LoadingState rows={6} />;
+  if (meta.error) return <ErrorState error={meta.error} />;
   const m = meta.data!;
-  const providerList = (providers.data ?? []).filter((p) => p.kind === "discovery");
   const country = m.countries.find((c) => c.code === values.country);
-  const isDemo = (values.sources ?? []).includes("demo");
-  // A real search can't start with no credits left or after the trial ended; demo searches are free.
+  // A search can't start with no credits left or after the trial ended.
   const noCredits =
     !!billing && !billing.billing_exempt && (billing.balance <= 0 || (billing.on_trial && billing.trial_expired));
   const sep = locale === "ar" ? "، " : ", ";
@@ -111,11 +131,11 @@ export function CampaignWizard() {
   async function next() {
     const ok = await trigger(STEP_FIELDS[step] as never);
     if (!ok) return;
-    if (step === 3) {
+    if (step === LAST_STEP - 1) {
       if (!getValues("name")) {
         const ind = m.industries.find((i) => i.key === getValues("industry"));
         const place = getValues("city") || (locale === "ar" ? country?.name_ar : country?.name_en) || getValues("country");
-        setValue("name", `${(locale === "ar" ? ind?.ar : ind?.en) ?? getValues("industry")} · ${place}${isDemo ? ` ${t.wizard.demoSuffix}` : ""}`);
+        setValue("name", `${(locale === "ar" ? ind?.ar : ind?.en) ?? getValues("industry")} · ${place}`);
       }
       try {
         const parsed = campaignSchema.safeParse(getValues());
@@ -126,28 +146,13 @@ export function CampaignWizard() {
         setEstimate(null);
       }
     }
-    setStep((s) => Math.min(s + 1, 4));
+    setStep((s) => Math.min(s + 1, LAST_STEP));
   }
-
-  function toggleSource(p: Provider) {
-    const current = new Set(getValues("sources"));
-    if (current.has(p.key)) current.delete(p.key);
-    else if (p.key === "demo") {
-      current.clear();
-      current.add("demo");
-    } else {
-      current.delete("demo");
-      current.add(p.key);
-    }
-    setValue("sources", [...current], { shouldValidate: true });
-  }
-
-  const selectable = (p: Provider) => p.status === "connected" || p.key === "facebook" || p.key === "manual";
 
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader title={t.wizard.title} />
-      <ol className="mb-6 grid grid-cols-5 gap-2" aria-label={t.common.steps}>
+      <ol className="mb-6 grid grid-cols-3 gap-2" aria-label={t.common.steps}>
         {t.wizard.steps.map((label, i) => (
           <li key={label}>
             <button
@@ -258,13 +263,7 @@ export function CampaignWizard() {
                     control={control}
                     name="services"
                     render={({ field }) => (
-                      <div className="flex flex-wrap gap-2">
-                        {!offerings.length ? (
-                          <p className="text-xs text-muted-foreground">
-                            {t.business.noOfferings}{" "}
-                            <Link href="/app/settings" className="text-primary underline">{t.business.tab}</Link>
-                          </p>
-                        ) : null}
+                      <div className="flex flex-wrap items-center gap-2">
                         {offerings.map((s) => {
                           const on = field.value.includes(s.id);
                           return (
@@ -285,123 +284,71 @@ export function CampaignWizard() {
                             </button>
                           );
                         })}
+                        {!adding ? (
+                          <button
+                            type="button"
+                            onClick={() => setAdding(true)}
+                            disabled={offerings.length >= MAX_OFFERINGS}
+                            title={offerings.length >= MAX_OFFERINGS ? t.wizard.servicesFull : undefined}
+                            className="inline-flex items-center gap-1 rounded-full border border-dashed px-3 py-1 text-xs text-primary hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Plus className="size-3.5" /> {t.wizard.addService}
+                          </button>
+                        ) : null}
                       </div>
                     )}
                   />
+                  {adding ? (
+                    <div className="mt-3 grid gap-3 rounded-lg border p-3 sm:grid-cols-[1fr_1.5fr_auto] sm:items-end">
+                      <Field label={t.wizard.newServiceName} htmlFor="new_service_name">
+                        <Input
+                          id="new_service_name"
+                          autoFocus
+                          maxLength={120}
+                          value={draft.name}
+                          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              if (draft.name.trim()) addService.mutate();
+                            }
+                          }}
+                        />
+                      </Field>
+                      <Field label={t.wizard.newServiceDesc} htmlFor="new_service_desc">
+                        <Input
+                          id="new_service_desc"
+                          maxLength={600}
+                          value={draft.description}
+                          onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                        />
+                      </Field>
+                      <div className="flex gap-2">
+                        <Button type="button" size="sm" disabled={!draft.name.trim() || addService.isPending} onClick={() => addService.mutate()}>
+                          {addService.isPending ? <Spinner /> : <Plus />} {t.wizard.addService}
+                        </Button>
+                        <Button type="button" size="sm" variant="ghost" aria-label={t.common.cancel} onClick={() => { setAdding(false); setDraft(EMPTY_SERVICE); }}>
+                          <X />
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {!offerings.length && !adding ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {t.business.noOfferings}{" "}
+                      <Link href="/app/settings" className="text-primary underline">{t.business.tab}</Link>
+                    </p>
+                  ) : null}
                 </fieldset>
+                <Field label={t.wizard.targetCount} htmlFor="target_count" hint={t.wizard.targetHint}
+                       error={vmsg(formState.errors.target_count?.message)} className="sm:max-w-xs">
+                  <Input id="target_count" type="number" inputMode="numeric" min={1} max={500}
+                         aria-invalid={!!formState.errors.target_count} {...register("target_count")} />
+                </Field>
               </div>
             )}
 
-            {step === 2 && (
-              <div className="space-y-4">
-                <p className="text-xs text-muted-foreground">{t.wizard.sourcesHint}</p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {[...providerList]
-                    .sort((a, b) => SOURCE_ORDER.indexOf(a.key) - SOURCE_ORDER.indexOf(b.key))
-                    .map((p) => {
-                      const on = (values.sources ?? []).includes(p.key);
-                      const can = selectable(p);
-                      return (
-                        <label
-                          key={p.key}
-                          className={cn(
-                            "flex cursor-pointer gap-3 rounded-lg border p-4 transition-colors",
-                            on && "border-rasd-500 bg-rasd-500/10",
-                            !can && "cursor-not-allowed opacity-60",
-                          )}
-                        >
-                          <Checkbox checked={on} onCheckedChange={() => can && toggleSource(p)} aria-label={p.name} />
-                          <div className="min-w-0 flex-1 space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-medium">
-                                {platformAdmin ? (t.labels[p.key] ?? p.name) : (t.customerSources[p.key]?.name ?? source(p.key))}
-                              </span>
-                              <ProviderStatusBadge status={p.status} />
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              {platformAdmin
-                                ? ((t.providerDesc as Record<string, string>)[p.key] ?? p.description)
-                                : (t.customerSources[p.key]?.desc ?? "")}
-                            </p>
-                            {platformAdmin && p.status_detail && p.status !== "connected" ? (
-                              <p className="text-xs text-warning">{p.status_detail}</p>
-                            ) : null}
-                          </div>
-                        </label>
-                      );
-                    })}
-                </div>
-                {formState.errors.sources ? (
-                  <p role="alert" className="text-xs text-destructive">
-                    {vmsg(formState.errors.sources.message)}
-                  </p>
-                ) : null}
-                {(values.sources ?? []).some((s) => s === "facebook" || s === "manual") ? (
-                  <Field label={t.wizard.manualUrls} htmlFor="manual_urls" error={vmsg(formState.errors.manual_urls?.message)}
-                         hint={t.wizard.facebookHint}>
-                    <Textarea id="manual_urls" rows={4} placeholder="https://clinic.example.sa" {...register("manual_urls")} />
-                  </Field>
-                ) : null}
-                {(values.sources ?? []).includes("import") ? (
-                  <ImportUpload
-                    error={vmsg(formState.errors.import_rows?.message)}
-                    onRows={(rows) => setValue("import_rows", rows, { shouldValidate: true })}
-                  />
-                ) : null}
-                {isDemo ? (
-                  <p className="flex items-center gap-2 rounded-md bg-sun-500/10 p-3 text-xs">
-                    <FlaskConical className="size-4 text-sun-500" /> {t.wizard.demoNote}
-                  </p>
-                ) : (
-                  <OutOfCredits />
-                )}
-              </div>
-            )}
-
-            {step === 3 && (
-              <div className="grid gap-4 sm:grid-cols-3">
-                {(
-                  [
-                    ["target_count", t.wizard.targetCount],
-                    ["max_companies", t.wizard.maxCompanies],
-                    ["max_pages_per_site", t.wizard.maxPages],
-                    ["min_score", t.wizard.minScore],
-                    ["max_runtime_minutes", t.wizard.maxRuntime],
-                    ["concurrency", t.wizard.concurrency],
-                  ] as const
-                ).map(([name, label]) => (
-                  <Field key={name} label={label} htmlFor={name} error={vmsg(formState.errors[name]?.message)}>
-                    <Input id={name} type="number" inputMode="decimal" aria-invalid={!!formState.errors[name]} {...register(name)} />
-                  </Field>
-                ))}
-                <div className="space-y-3 sm:col-span-3">
-                  {(
-                    [
-                      ["enrichment", t.wizard.enrichment],
-                      ["ai_analysis", t.wizard.ai],
-                      ["email_verification", t.wizard.emailVerification],
-                      ["exclude_duplicates", t.wizard.excludeDuplicates],
-                    ] as const
-                  ).map(([name, label]) => (
-                    <Controller
-                      key={name}
-                      control={control}
-                      name={name}
-                      render={({ field }) => (
-                        <div className="flex items-center justify-between gap-4 rounded-md border p-3">
-                          <label htmlFor={name} className="text-sm">
-                            {label}
-                          </label>
-                          <Switch id={name} checked={!!field.value} onCheckedChange={field.onChange} />
-                        </div>
-                      )}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {step === 4 && (
+            {step === LAST_STEP && (
               <div className="space-y-5">
                 <Field label={t.wizard.name} htmlFor="name" error={vmsg(formState.errors.name?.message)}>
                   <Input id="name" {...register("name")} />
@@ -412,10 +359,7 @@ export function CampaignWizard() {
                     [t.wizard.industry, industryName(values.industry)],
                     [t.wizard.keywords, values.keywords || "—"],
                     [t.wizard.services, (values.services ?? []).map(serviceName).join(sep) || "—"],
-                    [t.campaigns.sources, (values.sources ?? []).map((k) => (platformAdmin ? label(k) : (t.customerSources[k]?.name ?? source(k)))).join(sep)],
-                    [t.wizard.targetCount, `${values.target_count} (${t.wizard.maxCompanies}: ${values.max_companies})`],
-                    [t.wizard.ai, values.ai_analysis ? t.common.yes : t.common.no],
-                    [t.wizard.emailVerification, values.email_verification ? t.common.yes : t.common.no],
+                    [t.wizard.targetCount, String(values.target_count)],
                   ].map(([k, v]) => (
                     <div key={String(k)} className="flex flex-col gap-0.5 border-b pb-2">
                       <dt className="text-xs text-muted-foreground">{k}</dt>
@@ -423,34 +367,32 @@ export function CampaignWizard() {
                     </div>
                   ))}
                 </dl>
-                {estimate ? (
+                {estimate && (estimate.credits_max > 0 || platformAdmin) ? (
                   <div className="rounded-lg border bg-muted/50 p-4 text-sm">
-                    <p className="mb-2 font-medium">{t.wizard.estimate}</p>
-                    {platformAdmin ? (
-                      <p>
-                        ~{estimate.estimated_requests} {t.wizard.providerRequests} ·{" "}
-                        {estimate.estimated_cost_usd !== null ? `~$${estimate.estimated_cost_usd}` : "—"}
-                      </p>
-                    ) : null}
                     {estimate.credits_max > 0 ? (
-                      <p className="mt-1 font-medium">
+                      <p className="font-medium">
                         {t.wizard.creditsUpTo
                           .replace("{n}", String(estimate.credits_max))
                           .replace("{b}", String(estimate.credit_balance ?? 0))}
                       </p>
                     ) : null}
-                    <ul className="mt-2 list-disc space-y-1 ps-5 text-xs text-muted-foreground">
-                      {estimate.notes.map((n) => (
-                        <li key={n}>{n}</li>
-                      ))}
-                    </ul>
+                    {/* Providers, costs and caps are the platform's business: the server sends them to admins only. */}
+                    {platformAdmin ? (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        <p>
+                          ~{estimate.estimated_requests} {t.wizard.providerRequests} ·{" "}
+                          {estimate.estimated_cost_usd !== null ? `~$${estimate.estimated_cost_usd}` : "—"}
+                        </p>
+                        <ul className="mt-1 list-disc space-y-1 ps-5">
+                          {estimate.notes.map((n) => (
+                            <li key={n}>{n}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
-                {isDemo ? (
-                  <p className="flex items-center gap-2 rounded-md bg-sun-500/10 p-3 text-xs">
-                    <FlaskConical className="size-4 text-sun-500" /> {t.wizard.demoNote}
-                  </p>
-                ) : null}
+                <OutOfCredits />
               </div>
             )}
           </CardContent>
@@ -460,7 +402,7 @@ export function CampaignWizard() {
           <Button type="button" variant="ghost" onClick={() => (step === 0 ? router.push("/app/campaigns") : setStep(step - 1))}>
             <ChevronLeft className="rtl:rotate-180" /> {step === 0 ? t.common.cancel : t.common.back}
           </Button>
-          {step < 4 ? (
+          {step < LAST_STEP ? (
             <Button type="button" onClick={next}>
               {t.common.next} <ChevronRight className="rtl:rotate-180" />
             </Button>
@@ -474,7 +416,7 @@ export function CampaignWizard() {
               >
                 <Save /> {t.wizard.saveDraft}
               </Button>
-              <Button type="submit" variant="accent" disabled={submit.isPending || (!isDemo && noCredits)}>
+              <Button type="submit" variant="accent" disabled={submit.isPending || noCredits}>
                 {submit.isPending ? <Spinner /> : <Sparkles />} {t.wizard.startCampaign}
               </Button>
             </div>

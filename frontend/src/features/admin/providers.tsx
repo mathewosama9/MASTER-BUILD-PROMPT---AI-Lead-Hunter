@@ -4,7 +4,7 @@
 // else); customers never see keys, costs or provider names.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, KeyRound, PlugZap } from "lucide-react";
+import { ExternalLink, KeyRound, PlugZap, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -47,7 +47,15 @@ function ProviderCard({ p, canEdit }: { p: Provider; canEdit: boolean }) {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const remove = useMutation({
+    mutationFn: () =>
+      api(`/providers/${p.key}`, { method: "PUT", body: { credentials: Object.fromEntries(fields.map((f) => [f, ""])) } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["providers"] }); toast.success(t.settings.keyRemoved); },
+    onError: (e: Error) => toast.error(e.message),
+  });
   const fields = p.requires.filter((r) => r !== "manual_urls");
+  // Brave takes several API keys (one per line), used in turn by the backend.
+  const multiKey = p.key === "brave";
   return (
     <Card>
       <CardHeader>
@@ -62,19 +70,18 @@ function ProviderCard({ p, canEdit }: { p: Provider; canEdit: boolean }) {
       <CardContent className="space-y-3">
         {p.status_detail ? <p className="text-xs text-muted-foreground">{p.status_detail}</p> : null}
         {p.last_error ? <p className="text-xs text-destructive">{p.last_error}</p> : null}
-        {fields.map((f) =>
-          p.credential_source === "env" ? (
-            <p key={f} className="flex items-center gap-1.5 text-xs text-muted-foreground"><KeyRound className="size-3.5" /> {label(f)}: {p.credentials_masked[f] ?? "—"} ({t.settings.credentialFromEnv})</p>
-          ) : (
-            <Field key={f} label={label(f)} htmlFor={`${p.key}-${f}`} hint={p.credentials_masked[f] ? `${t.common.current}: ${p.credentials_masked[f]}` : undefined}>
-              {f === "credentials_json" ? (
-                <Textarea id={`${p.key}-${f}`} disabled={!canEdit} rows={3} value={creds[f] ?? ""} onChange={(e) => setCreds({ ...creds, [f]: e.target.value })} />
+        {p.credential_source === "env" ? (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><KeyRound className="size-3.5" /> {t.settings.envReplaceHint}</p>
+        ) : null}
+        {fields.map((f) => (
+            <Field key={f} label={label(f)} htmlFor={`${p.key}-${f}`} hint={[multiKey ? t.settings.multiKeyHint : null, p.credentials_masked[f] ? `${t.common.current}: ${p.credentials_masked[f]}` : null].filter(Boolean).join(" ") || undefined}>
+              {f === "credentials_json" || multiKey ? (
+                <Textarea id={`${p.key}-${f}`} dir={multiKey ? "ltr" : undefined} autoComplete="off" disabled={!canEdit} rows={3} value={creds[f] ?? ""} onChange={(e) => setCreds({ ...creds, [f]: e.target.value })} />
               ) : (
                 <Input id={`${p.key}-${f}`} type="password" autoComplete="off" disabled={!canEdit} value={creds[f] ?? ""} onChange={(e) => setCreds({ ...creds, [f]: e.target.value })} />
               )}
             </Field>
-          ),
-        )}
+        ))}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
           <div className="flex items-center gap-2 text-xs">
             <Switch id={`${p.key}-enabled`} checked={p.enabled} disabled={!canEdit} onCheckedChange={(v) => save.mutate({ enabled: v })} />
@@ -83,8 +90,20 @@ function ProviderCard({ p, canEdit }: { p: Provider; canEdit: boolean }) {
           </div>
           <div className="flex gap-1.5">
             {p.docs_url ? <Button asChild size="sm" variant="ghost"><a href={p.docs_url} target="_blank" rel="noopener noreferrer"><ExternalLink /> {t.common.docs}</a></Button> : null}
-            {canEdit && fields.length && p.credential_source !== "env" ? (
+            {canEdit && fields.length ? (
               <Button size="sm" variant="outline" disabled={!Object.values(creds).some(Boolean) || save.isPending} onClick={() => save.mutate({ credentials: creds })}>{t.settings.save}</Button>
+            ) : null}
+            {/* A saved key can be deleted to put in another one (or to fall back to the server's env key). */}
+            {canEdit && fields.length && (p.credential_source === "platform" || p.credential_source === "workspace") ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-destructive"
+                disabled={remove.isPending}
+                onClick={() => confirm((p.has_env_key ? t.settings.removeKeyEnvConfirm : t.settings.removeKeyConfirm).replace("{name}", p.name)) && remove.mutate()}
+              >
+                {remove.isPending ? <Spinner /> : <Trash2 />} {t.settings.removeKey}
+              </Button>
             ) : null}
             {canEdit ? (
               <Button size="sm" onClick={() => test.mutate()} disabled={test.isPending}>{test.isPending ? <Spinner /> : <PlugZap />} {t.settings.testConnection}</Button>

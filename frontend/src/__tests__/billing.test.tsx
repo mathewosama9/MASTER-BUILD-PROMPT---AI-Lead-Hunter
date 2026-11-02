@@ -37,13 +37,16 @@ const summary = {
   pending_topups: 0,
   payment_instructions_ar: "حوّل على إنستاباي",
   payment_instructions_en: "Send via InstaPay to mathew@instapay",
+  paypal_enabled: true,
 };
 
 function mockApi(overrides: Record<string, unknown> = {}) {
   const routes: Record<string, unknown> = {
     "/auth/me": { user: { id: "u", email: "o@x.co", full_name: "O", is_active: true, locale: "en" }, workspace_id: "w", workspace_name: "W", role: "owner", csrf_token: null, demo_mode: false },
     "/billing/summary": summary,
-    "/billing/packages": [{ id: "p1", name_ar: "باقة 500", name_en: "500 pack", credits: 500, price: "750.00", currency: "EGP" }],
+    "/billing/packages": [{ id: "p1", name_ar: "باقة 500", name_en: "500 pack", credits: 500, price: "50.00", currency: "USD" }],
+    "/billing/paypal/orders": { order_id: "ORD1", approve_url: "https://www.sandbox.paypal.com/checkoutnow?token=ORD1" },
+    "/billing/paypal/capture": { id: "t2", package_id: "p1", credits: 500, amount: "50.00", currency: "USD", method: "paypal", reference: "ORD1", receipt_filename: null, status: "approved", reason: null, created_at: "2026-11-02T10:00:00Z", reviewed_at: "2026-11-02T10:01:00Z" },
     "/billing/topups": [{ id: "t1", package_id: "p1", credits: 500, amount: "750.00", currency: "EGP", method: "vodafone_cash", reference: null, receipt_filename: "r.png", status: "rejected", reason: "Amount did not match", created_at: "2026-10-30T10:00:00Z", reviewed_at: "2026-10-30T11:00:00Z" }],
     "/billing/transactions": { items: [{ id: "x1", delta: 100, balance_after: 100, kind: "trial_grant", campaign_id: null, business_id: null, note: "Free trial", created_at: "2026-10-30T09:00:00Z" }, { id: "x2", delta: -1, balance_after: 99, kind: "campaign_charge", campaign_id: "c", business_id: "b", note: null, created_at: "2026-10-30T09:30:00Z" }], total: 2, page: 1, page_size: 20 },
     ...overrides,
@@ -73,27 +76,33 @@ describe("billing page", () => {
     expect(screen.getByText("+100")).toBeInTheDocument();
   });
 
-  it("opens the top-up form with the payment instructions when a package is chosen", async () => {
-    mockApi();
+  it("sells packages in dollars through PayPal checkout", async () => {
+    const fetch = mockApi();
     wrap(<BillingPage />);
-    expect(await screen.findByText("Pick a package to see how to pay.")).toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("button", { name: "Choose" }));
-    expect(screen.getByText("Send via InstaPay to mathew@instapay")).toBeInTheDocument();
-    expect(screen.getByText("Amount to transfer")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Selected" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Send for review" })).toBeDisabled(); // no receipt yet
+    expect(await screen.findByText("$50")).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Pay with PayPal" }));
+    const call = fetch.mock.calls.find(([url]) => String(url).includes("/billing/paypal/orders"));
+    expect(call).toBeTruthy();
+    expect(JSON.parse(String(call![1]?.body))).toEqual({ package_id: "p1" });
+    expect(screen.queryByText("Send for review")).not.toBeInTheDocument(); // no manual transfers any more
   });
 
-  it("preselects the package chosen on the pricing page and shows a receipt preview", async () => {
-    search.value = "pkg=p1";
-    mockApi();
-    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:receipt", revokeObjectURL: () => {} }));
+  it("captures the payment when the client comes back from PayPal", async () => {
+    search.value = "paypal=return&token=ORD1";
+    const fetch = mockApi();
     wrap(<BillingPage />);
-    expect(await screen.findByText("Send via InstaPay to mathew@instapay")).toBeInTheDocument();
-    const file = new File(["x"], "receipt.png", { type: "image/png" });
-    await userEvent.upload(screen.getByLabelText("Receipt"), file);
-    expect(screen.getByText("receipt.png")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send for review" })).toBeEnabled();
+    await screen.findByText("$50");
+    await vi.waitFor(() => {
+      const call = fetch.mock.calls.find(([url]) => String(url).includes("/billing/paypal/capture"));
+      expect(JSON.parse(String(call![1]?.body))).toEqual({ order_id: "ORD1" });
+    });
+  });
+
+  it("disables checkout until the store's PayPal account is connected", async () => {
+    mockApi({ "/billing/summary": { ...summary, paypal_enabled: false } });
+    wrap(<BillingPage />);
+    expect(await screen.findByText("Online payment is not available right now. Please try again later.")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Pay with PayPal" })).toBeDisabled();
   });
 
   it("tells unmetered workspaces they don't use credits", async () => {

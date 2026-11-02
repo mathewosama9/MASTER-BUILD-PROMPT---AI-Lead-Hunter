@@ -11,7 +11,7 @@ from decimal import Decimal
 from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, LargeBinary, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, Timestamps, UUIDPk
+from app.models.base import Base, JSONType, Timestamps, UUIDPk
 from app.models.enums import TopUpStatus
 
 
@@ -30,6 +30,8 @@ class PlatformSettings(Timestamps, Base):
     # The platform's own workspace whose searches feed the public site's live preview. Customer workspaces are
     # never read for the preview.
     showcase_workspace_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workspaces.id", ondelete="SET NULL"))
+    # Research settings applied to every client campaign (schemas/campaign.py ResearchDefaults); {} = defaults.
+    research_defaults: Mapped[dict] = mapped_column(JSONType, default=dict)
 
 
 class CreditPackage(UUIDPk, Timestamps, Base):
@@ -39,7 +41,7 @@ class CreditPackage(UUIDPk, Timestamps, Base):
     name_en: Mapped[str] = mapped_column(String(120))
     credits: Mapped[int] = mapped_column(Integer)
     price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    currency: Mapped[str] = mapped_column(String(3), default="EGP")
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     featured: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # "most popular" tag
     sort: Mapped[int] = mapped_column(Integer, default=0)
@@ -80,7 +82,8 @@ class ContactRequest(UUIDPk, Timestamps, Base):
 
 
 class TopUpRequest(UUIDPk, Timestamps, Base):
-    """A client's manual payment (InstaPay / bank transfer / Vodafone Cash) awaiting the admin's review."""
+    """A credit purchase: a PayPal order (approved automatically once captured) or a legacy manual payment
+    (InstaPay / bank transfer / Vodafone Cash with a receipt) reviewed by the admin."""
 
     __tablename__ = "topup_requests"
 
@@ -88,7 +91,7 @@ class TopUpRequest(UUIDPk, Timestamps, Base):
     package_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("credit_packages.id", ondelete="SET NULL"))
     credits: Mapped[int] = mapped_column(Integer)  # snapshot of the package at request time
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    currency: Mapped[str] = mapped_column(String(3), default="EGP")
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
     method: Mapped[str] = mapped_column(String(20))  # PaymentMethod
     reference: Mapped[str | None] = mapped_column(String(200))
     receipt_filename: Mapped[str | None] = mapped_column(String(500))  # as uploaded; display only
@@ -101,3 +104,5 @@ class TopUpRequest(UUIDPk, Timestamps, Base):
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     reviewed_at: Mapped[datetime | None]
     transaction_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("credit_transactions.id", ondelete="SET NULL"))
+    provider_order_id: Mapped[str | None] = mapped_column(String(64), unique=True)  # PayPal order id
+    provider_capture_id: Mapped[str | None] = mapped_column(String(64))

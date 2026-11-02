@@ -86,6 +86,7 @@ def create_app() -> FastAPI:
         profile.router,
         public.router,
         billing.router,
+        billing.webhook_router,
         admin.router,
         admin_insights.router,
         reviews.router,

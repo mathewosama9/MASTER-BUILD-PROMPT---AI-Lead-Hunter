@@ -1,5 +1,4 @@
 """Telegram command and callback tests: real aiogram Dispatcher, recorded Bot API calls, mocked backend."""
-import base64
 import json
 from datetime import datetime
 from typing import Any
@@ -9,7 +8,7 @@ import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, GetFile, SendDocument, SendMessage, TelegramMethod
-from aiogram.types import CallbackQuery, Chat, Document, File, Message, Update, User
+from aiogram.types import CallbackQuery, Chat, File, Message, Update, User
 
 from bot import middleware
 from bot.app import build_dispatcher
@@ -439,25 +438,9 @@ async def test_balance(env):
     assert "<b>80</b>" in session.last().text and "12 days left" in session.last().text
 
 
-async def test_top_up_with_receipt(env):
+async def test_top_up_points_to_paypal_checkout(env):
     dp, bot, session, backend = env
     await feed(dp, bot, cb(LINKED, "b:pkgs"), cb(LINKED, f"b:pkg:{PKG_ID}"))
-    assert "750 EGP" in session.last().text and "Send to 0100" in session.last().text
-    await feed(dp, bot, cb(LINKED, "b:mth:instapay"), msg(LINKED, "REF-77"))
-    assert "receipt" in session.last().text
-    doc = Document(file_id="f1", file_unique_id="u1", file_name="receipt.pdf", mime_type="application/pdf",
-                   file_size=len(RECEIPT))
-    await feed(dp, bot, msg(LINKED, document=doc))
-    assert len(backend.topups) == 1
-    sent = backend.topups[0]
-    assert sent["package_id"] == PKG_ID and sent["method"] == "instapay" and sent["reference"] == "REF-77"
-    assert base64.b64decode(sent["receipt_base64"]) == RECEIPT
-    assert "Request sent" in session.last().text
-
-
-async def test_top_up_rejects_non_receipt_files(env):
-    dp, bot, session, backend = env
-    await feed(dp, bot, cb(LINKED, f"b:pkg:{PKG_ID}"), cb(LINKED, "b:mth:bank_transfer"), cb(LINKED, "b:skipref"))
-    doc = Document(file_id="f2", file_unique_id="u2", file_name="x.zip", mime_type="application/zip", file_size=10)
-    await feed(dp, bot, msg(LINKED, document=doc))
-    assert not backend.topups and "a photo, an image or a PDF" in session.last().text
+    text = session.last().text
+    assert "PayPal" in text and "receipt" not in text
+    assert not backend.topups  # nothing is requested from the bot any more

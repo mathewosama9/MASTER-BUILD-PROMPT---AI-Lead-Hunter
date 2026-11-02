@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -14,7 +15,19 @@ from app.research.pipeline import execute_campaign
 from app.workers.celery_app import celery_app
 
 log = logging.getLogger(__name__)
-LOCK_TTL = 60 * 60 * 2
+# Runs have no time limit, so the run lock is kept short and renewed while the run is alive: a crashed worker
+# frees it within LOCK_TTL, and a redelivered copy of a long run finds it held and exits.
+LOCK_TTL = 60 * 15
+LOCK_RENEW_EVERY = 60 * 5
+
+
+def _keep_lock(lock, stop: threading.Event) -> None:  # noqa: ANN001
+    while not stop.wait(LOCK_RENEW_EVERY):
+        try:
+            lock.extend(LOCK_TTL, replace_ttl=True)
+        except Exception:  # noqa: BLE001 - lost the lock (Redis restart); the run itself carries on
+            log.warning("run lock renewal failed")
+            return
 
 
 @celery_app.task(name="app.workers.tasks.run_campaign", bind=True, max_retries=3, acks_late=True)
@@ -24,12 +37,15 @@ def run_campaign(self, campaign_id: str, run_id: str) -> str | None:  # noqa: AN
     if not lock.acquire(blocking=False):
         log.info("run already executing elsewhere", extra={"run_id": run_id})
         return None
+    stop = threading.Event()
+    threading.Thread(target=_keep_lock, args=(lock, stop), daemon=True).start()
     try:
         return asyncio.run(_run(uuid.UUID(campaign_id), uuid.UUID(run_id)))
     except Exception as exc:
         log.exception("run_campaign crashed", extra={"run_id": run_id})
         raise self.retry(exc=exc, countdown=min(60 * 2**self.request.retries, 600)) from exc
     finally:
+        stop.set()
         try:
             lock.release()
         except Exception:  # noqa: BLE001 - lock may already have expired

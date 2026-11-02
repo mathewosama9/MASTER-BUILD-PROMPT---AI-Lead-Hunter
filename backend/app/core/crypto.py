@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import re
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -28,4 +29,7 @@ def decrypt_secret(token: str) -> str | None:
 def mask_secret(value: str | None) -> str | None:
     if not value:
         return None
+    parts = [v for v in re.split(r"[\s,;]+", value) if v]
+    if len(parts) > 1:  # several keys in one credential (e.g. Brave): mask each
+        return ", ".join(m for v in parts if (m := mask_secret(v)))
     return f"********{value[-4:]}" if len(value) > 8 else "********"

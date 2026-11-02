@@ -51,6 +51,7 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.pytest.ini_options]
+markers = ["managed: run campaigns under the client rule (platform research defaults)"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"

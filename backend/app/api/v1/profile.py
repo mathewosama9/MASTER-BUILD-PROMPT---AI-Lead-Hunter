@@ -7,14 +7,14 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import DB, CurrentPrincipal, audit, require_role
+from app.api.v1.campaigns import campaign_out
 from app.core.errors import AppError
 from app.models import Workspace
-from app.models.enums import ProviderStatus, Role
+from app.models.enums import Role
 from app.research.catalog import INDUSTRIES, PROVIDER_CATEGORIES
-from app.schemas.campaign import CampaignCreate, CampaignOut, ResearchSettings, SourceIn
+from app.schemas.campaign import CampaignCreate, CampaignOut
 from app.services import campaigns as campaign_svc
 from app.services import credits as credit_svc
-from app.services import providers as provider_svc
 from app.services.profile import ONBOARDING_STEPS, clean_offerings, get_profile, onboarding_state
 
 router = APIRouter(tags=["profile"])
@@ -110,9 +110,7 @@ async def update_profile(body: ProfileIn, p: CurrentPrincipal, db: DB) -> dict:
     return profile_out(profile)
 
 
-# Sources the first search may use, in order; only the ones connected right now are kept.
-FIRST_SEARCH_SOURCES = ("google_maps", "osm", "directories", "social_discovery", "brave")
-FIRST_SEARCH_SETTINGS = ResearchSettings(target_count=15, max_companies=30)
+FIRST_SEARCH_TARGET = 15  # sources and the other settings are the platform admin's (Admin → Settings)
 
 
 @router.post("/profile/first-search", response_model=CampaignOut, status_code=201, dependencies=[require_role(Role.ADMIN)])
@@ -126,11 +124,7 @@ async def first_search(p: CurrentPrincipal, db: DB, request: Request) -> Campaig
         raise AppError("Choose who you sell to and in which country first", code="profile_incomplete")
     # Fail before creating anything when the trial can't pay for it yet (e.g. email not confirmed).
     await credit_svc.ensure_can_spend(db, await db.get(Workspace, p.workspace_id))
-    sources = [
-        SourceIn(provider_key=k)
-        for k in FIRST_SEARCH_SOURCES
-        if (await provider_svc.provider_state(db, p.workspace_id, k)).status == ProviderStatus.CONNECTED
-    ]
+    sources, settings = await campaign_svc.managed_setup(db, p.workspace_id, FIRST_SEARCH_TARGET)
     if not sources:
         raise AppError("Search is not available right now. Please try again later.", code="no_sources", status_code=503)
     city = next(iter(profile.target_cities or []), None)
@@ -144,7 +138,7 @@ async def first_search(p: CurrentPrincipal, db: DB, request: Request) -> Campaig
         industry=industry,
         services=[o["id"] for o in (profile.offerings or []) if o.get("id")][:10],
         sources=sources,
-        settings=FIRST_SEARCH_SETTINGS,
+        settings=settings,
         start=True,
     )
     chat_id = p.telegram_account.chat_id if p.telegram_account else None
@@ -163,4 +157,4 @@ async def first_search(p: CurrentPrincipal, db: DB, request: Request) -> Campaig
     await db.commit()
     await campaign_svc.start_campaign(db, campaign)
     await db.refresh(campaign)
-    return CampaignOut.model_validate(campaign)
+    return campaign_out(campaign, p.user.is_superuser)

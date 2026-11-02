@@ -16,7 +16,7 @@ class ResearchSettings(BaseModel):
     email_verification: bool = False
     min_score: float = Field(default=50, ge=0, le=100)
     max_budget_usd: float = Field(default=5.0, ge=0, le=1000)
-    max_runtime_minutes: int = Field(default=30, ge=1, le=600)
+    max_runtime_minutes: int | None = Field(default=None, ge=1, le=1440)  # None: run until done
     concurrency: int = Field(default=4, ge=1, le=10)
     exclude_duplicates: bool = False
 
@@ -25,6 +25,34 @@ class ResearchSettings(BaseModel):
     def _at_least_target(cls, v: int, info) -> int:  # noqa: ANN001
         target = info.data.get("target_count", 1)
         return max(v, target)
+
+
+# Sources a managed (non platform-admin) campaign searches when the admin has not chosen otherwise.
+DEFAULT_RESEARCH_SOURCES = ["google_maps", "osm", "directories", "social_discovery", "brave"]
+
+
+class ResearchDefaults(BaseModel):
+    """Platform-wide research settings, edited by the platform admin and applied to every client campaign.
+    Clients only choose what they want (place, targeting, services, how many leads)."""
+
+    sources: list[str] = Field(default_factory=lambda: list(DEFAULT_RESEARCH_SOURCES), max_length=10)
+    concurrency: int = Field(default=4, ge=1, le=10)
+    enrichment: bool = True
+    ai_analysis: bool = True
+    email_verification: bool = False
+    exclude_duplicates: bool = False
+    max_pages_per_site: int = Field(default=8, ge=1, le=15)
+    min_score: float = Field(default=50, ge=0, le=100)
+    companies_per_target: int = Field(default=2, ge=1, le=5)  # businesses screened per lead asked for
+    max_budget_usd: float = Field(default=5.0, ge=0, le=1000)  # internal safety cap per campaign
+    max_runtime_minutes: int | None = Field(default=None, ge=1, le=1440)  # None: run until done
+
+    def research_settings(self, target_count: int) -> "ResearchSettings":
+        return ResearchSettings(
+            target_count=target_count,
+            max_companies=min(target_count * self.companies_per_target, 1000),
+            **self.model_dump(exclude={"sources", "companies_per_target"}),
+        )
 
 
 class SourceIn(BaseModel):
@@ -47,7 +75,8 @@ class CampaignCreate(BaseModel):
     services: list[str] = Field(default_factory=list, max_length=10)
     nl_query: str | None = Field(default=None, max_length=2000)
     research_spec: dict = Field(default_factory=dict)
-    sources: list[SourceIn] = Field(min_length=1, max_length=10)
+    # Platform admins pick sources; for everyone else the platform's ResearchDefaults decide (may be empty).
+    sources: list[SourceIn] = Field(default_factory=list, max_length=10)
     settings: ResearchSettings = Field(default_factory=ResearchSettings)
     is_demo: bool | None = None
     start: bool = False

@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Input } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n/provider";
 import { api } from "@/lib/api";
-import { formatNumber } from "@/lib/utils";
+import { formatNumber, formatPrice } from "@/lib/utils";
 import type { CreditPackage } from "@/types/api";
 
 import { Heading, Section } from "./parts";
@@ -34,7 +34,7 @@ export function CostCalculator({ tone = "muted" }: { tone?: "plain" | "muted" })
   const monthHours = h * WEEKS_PER_MONTH;
   const manual = monthHours * r;
   const rasd = perLead != null ? n * perLead : null;
-  const money = (v: number) => `${formatNumber(Math.round(v), locale)} ${smallest?.currency ?? ""}`.trim();
+  const money = (v: number) => (smallest ? formatPrice(Math.round(v), smallest.currency) : formatNumber(Math.round(v), locale));
 
   const field = (id: string, label: string, value: string, set: (v: string) => void) => (
     <label htmlFor={id} className="block">

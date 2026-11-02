@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import get_settings
-from bot.i18n import CRM, METHODS, RUNNING, label, num, t
+from bot.i18n import CRM, RUNNING, label, num, t
 
 CITIES_PER_PAGE = 9
 INDUSTRIES_PER_PAGE = 8
@@ -292,28 +292,24 @@ def packages_kb(packages: list[dict], lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for p in packages:
         name = p["name_ar"] if lang == "ar" else p["name_en"]
-        text = t("package_btn", lang, name=name, credits=num(p["credits"]), price=price_text(p["price"]),
-                 currency=p["currency"])
+        text = t("package_btn", lang, name=name, credits=num(p["credits"]), price=money_text(p["price"], p["currency"]))
         b.row(_btn(("⭐ " if p.get("featured") else "") + text, f"b:pkg:{p['id']}"))
     b.row(_btn(t("back", lang), "b:bal"), _btn(t("cancel", lang), "b:cancel"))
     return b.as_markup()
 
 
-def methods_kb(lang: str) -> InlineKeyboardMarkup:
+def pay_kb(lang: str, url: str | None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    for key in METHODS:
-        b.row(_btn(label(METHODS, key, lang), f"b:mth:{key}"))
+    if url:
+        b.row(InlineKeyboardButton(text=t("btn_pay_paypal", lang), url=url))
     b.row(_btn(t("back", lang), "b:pkgs"), _btn(t("cancel", lang), "b:cancel"))
     return b.as_markup()
 
 
-def reference_kb(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[_btn(t("skip", lang), "b:skipref"),
-                                                  _btn(t("cancel", lang), "b:cancel")]])
-
-
-def cancel_topup_kb(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[_btn(t("cancel", lang), "b:cancel")]])
+def money_text(value: object, currency: str) -> str:
+    """A store price: "$15" for US dollars, "15 EUR" otherwise."""
+    amount = price_text(value)
+    return f"${amount}" if currency == "USD" else f"{amount} {currency}"
 
 
 def price_text(value: object) -> str:

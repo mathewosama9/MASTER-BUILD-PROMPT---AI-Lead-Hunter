@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Check, CheckCircle2, Gift, Landmark, Smartphone, Wallet } from "lucide-react";
+import { Check, CheckCircle2, CreditCard, Gift, Landmark, Wallet } from "lucide-react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -122,11 +122,9 @@ export function PricingPage() {
             </h2>
             <p className="mt-6 leading-relaxed text-muted-foreground">{p.paymentBody}</p>
             <div className="mt-5 flex flex-wrap gap-2 text-sm">
-              {(["instapay", "bank_transfer", "vodafone_cash"] as const).map((m) => (
-                <span key={m} className="inline-flex items-center gap-1.5 rounded-full border bg-card px-3 py-1.5">
-                  <Smartphone className="size-3.5" aria-hidden /> {t.labels[m]}
-                </span>
-              ))}
+              <span className="inline-flex items-center gap-1.5 rounded-full border bg-card px-3 py-1.5">
+                <CreditCard className="size-3.5" aria-hidden /> {t.labels.paypal}
+              </span>
             </div>
             <Button asChild variant="link" className="mt-4 px-0">
               <Link href="/contact">{p.contactCta}</Link>

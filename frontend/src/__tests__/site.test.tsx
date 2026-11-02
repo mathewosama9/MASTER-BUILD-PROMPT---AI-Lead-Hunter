@@ -107,11 +107,11 @@ describe("public site", () => {
   it("pricing lists the packages the admin configured", async () => {
     mockApi({
       "/public/trial": trial,
-      "/public/packages": [{ id: "p", name_ar: "أساسية", name_en: "Starter", credits: 250, price: "400.00", currency: "EGP" }],
+      "/public/packages": [{ id: "p", name_ar: "أساسية", name_en: "Starter", credits: 250, price: "40.00", currency: "USD" }],
     });
     wrap(<PricingPage />);
     expect(await screen.findByText("Starter")).toBeInTheDocument();
-    expect(screen.getByText(/250 points · ≈ 1\.6 EGP per client/)).toBeInTheDocument();
+    expect(screen.getByText(/250 points · ≈ \$0\.16 per client/)).toBeInTheDocument();
     expect(await screen.findByText("30 days with 100 points to run real searches. No card needed.")).toBeInTheDocument();
   });
 

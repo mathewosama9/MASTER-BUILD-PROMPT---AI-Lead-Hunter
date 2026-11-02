@@ -249,7 +249,7 @@ export const siteEn = {
       },
       {
         q: "How do I pay?",
-        a: "Choose a point package, pay by InstaPay, bank transfer or Vodafone Cash, and upload the receipt from your dashboard. Points are added once the payment is confirmed.",
+        a: "Choose a point package and pay with PayPal (card or PayPal balance) from your dashboard. The points are added to your balance instantly.",
       },
       {
         q: "What if my points run out during a search?",
@@ -456,7 +456,7 @@ export const siteEn = {
     ],
     paymentTitle: "Payment methods",
     paymentBody:
-      "InstaPay, bank transfer or Vodafone Cash. Pay, upload the receipt from your dashboard, and the points are added once the payment is confirmed.",
+      "Pay securely with PayPal, by card or PayPal balance, in US dollars. The points are added to your balance as soon as the payment goes through.",
     contactCta: "Questions? Contact us",
   },
   contact: {
@@ -506,7 +506,7 @@ export const siteEn = {
       },
       {
         h: "Data about you",
-        p: "When you create an account we collect your name, company, email, phone number and a password (stored only as a secure hash). If you request a top-up we store the payment receipt you upload. If you use the contact form or leave a review we store what you send us. We also keep technical logs (such as IP address and actions taken) to secure the service.",
+        p: "When you create an account we collect your name, company, email, phone number and a password (stored only as a secure hash). When you buy points, PayPal processes the payment; we keep the order reference and amount, never your card details. If you use the contact form or leave a review we store what you send us. We also keep technical logs (such as IP address and actions taken) to secure the service.",
       },
       {
         h: "Business data inside the platform",
@@ -554,7 +554,7 @@ export const siteEn = {
       },
       {
         h: "Payments",
-        p: "Points are prepaid by InstaPay, bank transfer or Vodafone Cash. Points are added after we confirm the payment; a request we cannot confirm is rejected with a reason. For questions about a payment, contact us.",
+        p: "Points are prepaid in US dollars through PayPal and are added once PayPal confirms the payment. For questions about a payment, contact us.",
       },
       {
         h: "Lawful use",
@@ -825,7 +825,7 @@ export const siteAr: typeof siteEn = {
       },
       {
         q: "كيف أدفع؟",
-        a: "اختر باقة نقاط، وادفع عبر InstaPay أو تحويل بنكي أو فودافون كاش، وارفع الإيصال من لوحة التحكم. تُضاف النقاط بعد تأكيد الدفع.",
+        a: "اختر باقة نقاط وادفع بـ PayPal (بالكارت أو رصيد PayPal) من لوحة التحكم. تُضاف النقاط لرصيدك فوراً.",
       },
       {
         q: "ماذا يحدث لو نفدت نقاطي أثناء البحث؟",
@@ -1028,7 +1028,7 @@ export const siteAr: typeof siteEn = {
       "إذا نفدت النقاط يتوقف البحث؛ ولا تُحاسَب أبداً على جهات اتصال لم تستلمها.",
     ],
     paymentTitle: "طرق الدفع",
-    paymentBody: "InstaPay أو تحويل بنكي أو فودافون كاش. ادفع، وارفع الإيصال من لوحة التحكم، وتُضاف النقاط بعد تأكيد الدفع.",
+    paymentBody: "ادفع بأمان عبر PayPal بالكارت أو رصيد PayPal، بالدولار الأمريكي. تُضاف النقاط لرصيدك أول ما الدفع يتم.",
     contactCta: "لديك سؤال؟ تواصل معنا",
   },
   contact: {
@@ -1077,7 +1077,7 @@ export const siteAr: typeof siteEn = {
       },
       {
         h: "بياناتك",
-        p: "عند إنشاء حساب نجمع اسمك وشركتك وبريدك ورقم هاتفك وكلمة مرور (تُحفظ كتجزئة آمنة فقط). إذا طلبت شحن نقاط نحفظ إيصال الدفع الذي ترفعه. إذا استخدمت نموذج التواصل أو تركت تقييماً نحفظ ما ترسله. ونحتفظ أيضاً بسجلات تقنية (مثل عنوان IP والإجراءات المتخذة) لتأمين الخدمة.",
+        p: "عند إنشاء حساب نجمع اسمك وشركتك وبريدك ورقم هاتفك وكلمة مرور (تُحفظ كتجزئة آمنة فقط). عند شراء النقاط يعالج PayPal عملية الدفع؛ نحتفظ برقم الطلب والمبلغ فقط، ولا نرى بيانات بطاقتك أبداً. إذا استخدمت نموذج التواصل أو تركت تقييماً نحفظ ما ترسله. ونحتفظ أيضاً بسجلات تقنية (مثل عنوان IP والإجراءات المتخذة) لتأمين الخدمة.",
       },
       {
         h: "بيانات الشركات داخل المنصة",
@@ -1125,7 +1125,7 @@ export const siteAr: typeof siteEn = {
       },
       {
         h: "المدفوعات",
-        p: "تُدفع النقاط مسبقاً عبر InstaPay أو تحويل بنكي أو فودافون كاش. تُضاف النقاط بعد تأكيد الدفع؛ والطلب الذي لا نستطيع تأكيده يُرفض مع ذكر السبب. لأي سؤال عن دفعة تواصل معنا.",
+        p: "تُدفع النقاط مسبقاً بالدولار الأمريكي عبر PayPal، وتُضاف بعد تأكيد PayPal للدفع. لأي سؤال عن دفعة تواصل معنا.",
       },
       {
         h: "الاستخدام القانوني",

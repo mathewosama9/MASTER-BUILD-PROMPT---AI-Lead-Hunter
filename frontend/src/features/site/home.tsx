@@ -24,7 +24,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import { api } from "@/lib/api";
-import { cn, formatNumber } from "@/lib/utils";
+import { cn, formatPrice } from "@/lib/utils";
 import type { CreditPackage } from "@/types/api";
 
 import { CostCalculator } from "./cost-calculator";
@@ -401,7 +401,7 @@ function UseCasesTeaser() {
 }
 
 function PricingTeaser() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const h = t.site.home;
   const pkgs = useQuery({ queryKey: ["public-packages"], queryFn: () => api<CreditPackage[]>("/public/packages"), staleTime: 0 });
   const cheapest = [...(pkgs.data ?? [])].sort((a, b) => Number(a.price) - Number(b.price))[0];
@@ -416,7 +416,7 @@ function PricingTeaser() {
           <TrialNote className="font-display text-lg font-semibold text-rasd-800 dark:text-rasd-200" />
           {cheapest ? (
             <p className="mt-2 text-sm text-muted-foreground">
-              {h.pricingFrom.replace("{price}", `${formatNumber(Number(cheapest.price), locale)} ${cheapest.currency}`)}
+              {h.pricingFrom.replace("{price}", formatPrice(cheapest.price, cheapest.currency))}
             </p>
           ) : null}
           <div className="mt-5 flex flex-col gap-2">

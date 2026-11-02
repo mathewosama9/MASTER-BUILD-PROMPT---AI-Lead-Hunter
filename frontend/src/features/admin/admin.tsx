@@ -13,6 +13,7 @@ import {
   Package,
   Pencil,
   Plus,
+  CreditCard,
   Settings2,
   ShieldCheck,
   ShieldOff,
@@ -41,11 +42,13 @@ import { EmptyState, ErrorState, LoadingState, Spinner } from "@/components/ui/s
 import { useMe } from "@/hooks/queries";
 import { useI18n } from "@/i18n/provider";
 import { api, API_BASE } from "@/lib/api";
-import { cn, formatDate, formatNumber } from "@/lib/utils";
+import { cn, formatDate, formatNumber, formatPrice } from "@/lib/utils";
 import type { CreditPackage, Page, TopUp, TopUpStatus } from "@/types/api";
 
 import { type AdminTab, AdminOverviewTab, UsageTab } from "./insights";
+import { PayPalConnect } from "./paypal-connect";
 import { ProvidersAdmin } from "./providers";
+import { type ResearchDefaults, ResearchDefaultsEditor, researchDefaultsValid } from "./research-settings";
 import { TestimonialsAdmin } from "./testimonials";
 
 interface AdminTopUp extends TopUp {
@@ -77,6 +80,7 @@ interface PlatformSettings {
   credits_per_contact: number;
   payment_instructions_ar: string;
   payment_instructions_en: string;
+  research_defaults: ResearchDefaults;
 }
 interface ContactRequest {
   id: string;
@@ -103,13 +107,18 @@ const TABS: { key: AdminTab; icon: React.ComponentType<{ className?: string }> }
   { key: "testimonials", icon: MessageSquareQuote },
   { key: "providers", icon: KeyRound },
   { key: "usage", icon: BarChart3 },
+  { key: "payments", icon: CreditCard },
   { key: "settings", icon: Settings2 },
 ];
 
 export function AdminPage() {
   const { t } = useI18n();
   const { data: me } = useMe();
-  const [tab, setTab] = useState<AdminTab>("overview");
+  // A tab can be linked directly, e.g. /app/admin?tab=payments
+  const [tab, setTab] = useState<AdminTab>(() => {
+    const wanted = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("tab");
+    return TABS.some((x) => x.key === wanted) ? (wanted as AdminTab) : "overview";
+  });
   if (!me) return <LoadingState rows={4} />;
   if (!me.user.is_superuser) return <EmptyState title={t.admin.forbidden} />;
   return (
@@ -141,6 +150,7 @@ export function AdminPage() {
           {tab === "testimonials" ? <TestimonialsAdmin /> : null}
           {tab === "providers" ? <ProvidersAdmin /> : null}
           {tab === "usage" ? <UsageTab /> : null}
+          {tab === "payments" ? <PayPalConnect /> : null}
           {tab === "settings" ? <SettingsForm /> : null}
         </div>
       </div>
@@ -224,27 +234,30 @@ function TopUps() {
                       <p className="text-xs text-muted-foreground">{r.requested_by}</p>
                     </Td>
                     <Td className="tabular-nums">{formatNumber(r.credits, locale)}</Td>
-                    <Td className="whitespace-nowrap tabular-nums">
-                      {formatNumber(Number(r.amount), locale)} {r.currency}
-                    </Td>
+                    <Td className="whitespace-nowrap tabular-nums">{formatPrice(r.amount, r.currency)}</Td>
                     <Td>{label(r.method)}</Td>
                     <Td className="font-mono text-xs" dir="ltr">{r.reference ?? "—"}</Td>
                     <Td>
-                      <a
-                        href={`${API_BASE}/admin/topups/${r.id}/receipt`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                      >
-                        {t.billing.view} <ExternalLink className="size-3" aria-hidden />
-                      </a>
+                      {r.receipt_filename ? (
+                        <a
+                          href={`${API_BASE}/admin/topups/${r.id}/receipt`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                        >
+                          {t.billing.view} <ExternalLink className="size-3" aria-hidden />
+                        </a>
+                      ) : (
+                        "—"
+                      )}
                     </Td>
                     <Td>
                       <Badge tone={STATUS_TONE[r.status]}>{label(r.status)}</Badge>
                       {r.reason ? <p className="mt-1 max-w-48 text-xs text-muted-foreground">{r.reason}</p> : null}
                     </Td>
                     <Td>
-                      {r.status === "pending" ? (
+                      {/* PayPal checkouts settle themselves; only manual transfers are reviewed by hand. */}
+                      {r.status === "pending" && r.method !== "paypal" ? (
                         <div className="flex gap-1.5">
                           <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate(r.id)}>
                             <Check /> {t.admin.approve}
@@ -448,7 +461,7 @@ function Workspaces() {
 
 /* ---------------------------------------------------------------- packages */
 
-const EMPTY_PACKAGE = { name_ar: "", name_en: "", credits: "", price: "", currency: "EGP", sort: "0", active: true, featured: false };
+const EMPTY_PACKAGE = { name_ar: "", name_en: "", credits: "", price: "", currency: "USD", sort: "0", active: true, featured: false };
 type PackageDraft = typeof EMPTY_PACKAGE;
 
 function Packages() {
@@ -519,7 +532,7 @@ function Packages() {
                       <p className="text-xs text-muted-foreground">{locale === "ar" ? p.name_en : p.name_ar}</p>
                     </Td>
                     <Td className="tabular-nums">{formatNumber(p.credits, locale)}</Td>
-                    <Td className="whitespace-nowrap tabular-nums">{formatNumber(Number(p.price), locale)} {p.currency}</Td>
+                    <Td className="whitespace-nowrap tabular-nums">{formatPrice(p.price, p.currency)}</Td>
                     <Td className="tabular-nums">
                     {p.sort}
                     {p.featured ? <Badge tone="blue" className="ms-2">{t.admin.featured}</Badge> : null}
@@ -674,8 +687,12 @@ function SettingsEditor({ initial, onSaved }: { initial: PlatformSettings; onSav
     onError,
   });
   const int = (v: string) => /^\d+$/.test(v.trim());
-  const valid = int(s.trial_days) && int(s.trial_credits) && int(s.credits_per_contact) && Number(s.credits_per_contact) >= 1;
+  const valid =
+    int(s.trial_days) && int(s.trial_credits) && int(s.credits_per_contact) && Number(s.credits_per_contact) >= 1 &&
+    researchDefaultsValid(s.research_defaults);
   return (
+    <div className="space-y-6">
+    <ResearchDefaultsEditor value={s.research_defaults} onChange={(research_defaults) => setS({ ...s, research_defaults })} />
     <Card>
       <CardContent className="space-y-5 p-5">
         <div className="grid gap-4 sm:grid-cols-3">
@@ -690,18 +707,11 @@ function SettingsEditor({ initial, onSaved }: { initial: PlatformSettings; onSav
           </Field>
         </div>
         <p className="text-xs text-muted-foreground">{t.admin.settingsHint}</p>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label={t.admin.instructionsAr} htmlFor="st_ar" hint={t.admin.instructionsHint}>
-            <Textarea id="st_ar" dir="rtl" rows={5} value={s.payment_instructions_ar} onChange={(e) => setS({ ...s, payment_instructions_ar: e.target.value })} />
-          </Field>
-          <Field label={t.admin.instructionsEn} htmlFor="st_en" hint={t.admin.instructionsHint}>
-            <Textarea id="st_en" dir="ltr" rows={5} value={s.payment_instructions_en} onChange={(e) => setS({ ...s, payment_instructions_en: e.target.value })} />
-          </Field>
-        </div>
         <Button disabled={!valid || save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? <Spinner /> : null} {t.common.save}
         </Button>
       </CardContent>
     </Card>
+    </div>
   );
 }

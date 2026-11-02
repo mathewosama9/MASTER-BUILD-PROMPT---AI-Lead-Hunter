@@ -145,6 +145,7 @@ class PaymentMethod(StrEnum):
     INSTAPAY = "instapay"
     BANK_TRANSFER = "bank_transfer"
     VODAFONE_CASH = "vodafone_cash"
+    PAYPAL = "paypal"
 
 
 class TestimonialSource(StrEnum):

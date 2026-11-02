@@ -52,6 +52,14 @@ async def _schema():
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _unmanaged_unless_marked(request, monkeypatch):
+    """Pipeline tests pass explicit research settings, so they run campaigns the way a platform admin can.
+    Tests marked `managed` check the client rule: the platform's ResearchDefaults replace those settings."""
+    if request.node.get_closest_marker("managed") is None:
+        monkeypatch.setattr("app.api.v1.campaigns._managed", lambda p, body: False)
+
+
 @pytest.fixture
 async def db():
     async with get_sessionmaker()() as session:

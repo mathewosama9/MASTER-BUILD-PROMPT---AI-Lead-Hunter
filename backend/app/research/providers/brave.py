@@ -6,7 +6,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.models.enums import ProviderStatus
-from app.research import geo
+from app.research import brave_keys, geo
 from app.research.catalog import COUNTRIES
 from app.research.enrichment.normalize import business_domain, homepage_url
 from app.research.providers.base import (
@@ -46,7 +46,10 @@ class BraveSearchProvider:
         return ProviderState(ProviderStatus.CONNECTED)
 
     async def _request(self, client: httpx.AsyncClient, ctx: ProviderContext, params: dict) -> dict:
-        resp = await client.get(BRAVE_URL, params=params)
+        resp = await brave_keys.get_with_rotation(
+            ctx.credentials.get("api_key", ""),
+            lambda key: client.get(BRAVE_URL, params=params, headers={"X-Subscription-Token": key}),
+        )
         cost = get_settings().cost_brave_per_request
         if resp.status_code == 429:
             await ctx.record_usage(self.info.key, "web_search", 1, 0.0, False, 429)
@@ -54,7 +57,7 @@ class BraveSearchProvider:
             raise RateLimited(
                 "Brave Search rate limit reached", retry_after=float(retry_after.split(",")[0]) if retry_after else None
             )
-        if resp.status_code in (401, 403):
+        if resp.status_code in (401, 403) or (resp.status_code == 422 and "SUBSCRIPTION_TOKEN" in resp.text):
             await ctx.record_usage(self.info.key, "web_search", 1, 0.0, False, resp.status_code)
             raise ProviderError("Brave Search rejected the API key", status_code=resp.status_code)
         if resp.status_code >= 400:
@@ -73,7 +76,6 @@ class BraveSearchProvider:
             transport=self._transport,
             headers={
                 "Accept": "application/json",
-                "X-Subscription-Token": ctx.credentials.get("api_key", ""),
                 **(place.brave_headers() if place else {}),
             },
         )

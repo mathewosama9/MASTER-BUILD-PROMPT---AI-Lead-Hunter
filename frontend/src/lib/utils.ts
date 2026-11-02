@@ -16,6 +16,21 @@ export function formatMoney(n: number | null | undefined) {
   return `$${n.toFixed(n < 1 ? 3 : 2)}`;
 }
 
+/** A store price, e.g. "$15" or "$15.50" (the store sells in US dollars). */
+export function formatPrice(amount: number | string, currency = "USD") {
+  const n = Number(amount);
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
+      maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    return `${n} ${currency}`;
+  }
+}
+
 export function formatDate(iso: string | null | undefined, locale = "en") {
   if (!iso) return "—";
   return new Intl.DateTimeFormat(locale === "ar" ? "ar" : "en-GB", {

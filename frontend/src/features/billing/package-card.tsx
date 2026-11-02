@@ -1,7 +1,7 @@
 "use client";
 
 import { useI18n } from "@/i18n/provider";
-import { cn, formatNumber } from "@/lib/utils";
+import { cn, formatNumber, formatPrice } from "@/lib/utils";
 import type { CreditPackage } from "@/types/api";
 
 /** Index of the package to highlight: the admin's featured one, else the middle of three or more. */
@@ -44,14 +44,11 @@ export function PackageCard({
       ) : null}
       <p className={cn("font-display font-semibold", compact ? "text-base" : "text-lg")}>{locale === "ar" ? pkg.name_ar : pkg.name_en}</p>
       <p className={cn("font-display font-bold tabular-nums tracking-tight", compact ? "mt-3 text-3xl" : "mt-5 text-5xl")}>
-        {formatNumber(Number(pkg.price), locale)} <span className="text-lg font-medium">{pkg.currency}</span>
+        {formatPrice(pkg.price, pkg.currency)}
       </p>
       <p className={cn("mt-2 text-sm tabular-nums", hot ? "text-mist-300" : "text-muted-foreground")}>
         {formatNumber(pkg.credits, locale)} {p.credits} ·{" "}
-        {p.perContact.replace(
-          "{price}",
-          `${per.toLocaleString(locale === "ar" ? "ar-EG" : "en-US", { maximumFractionDigits: 2 })} ${pkg.currency}`,
-        )}
+        {p.perContact.replace("{price}", formatPrice(Math.round(per * 100) / 100, pkg.currency))}
       </p>
       {children ? <div className={cn("mt-auto", compact ? "pt-5" : "pt-7")}>{children}</div> : null}
     </div>

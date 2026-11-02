@@ -34,7 +34,7 @@ interface UsageRow {
   currency: string | null;
 }
 
-export type AdminTab = "overview" | "topups" | "workspaces" | "packages" | "contacts" | "testimonials" | "providers" | "usage" | "settings";
+export type AdminTab = "overview" | "topups" | "workspaces" | "packages" | "contacts" | "testimonials" | "providers" | "usage" | "payments" | "settings";
 
 function money(list: Money[], locale: string) {
   return list.length ? list.map((m) => `${formatNumber(m.amount, locale)} ${m.currency}`).join(" + ") : "0";

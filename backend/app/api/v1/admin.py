@@ -6,9 +6,10 @@ Every change is recorded in the audit log.
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import undefer
 
@@ -25,12 +26,15 @@ from app.models import (
     Workspace,
     WorkspaceMember,
 )
-from app.models.enums import CreditKind, Role, TestimonialSource, TestimonialStatus, TopUpStatus
+from app.models.enums import CreditKind, PaymentMethod, Role, TestimonialSource, TestimonialStatus, TopUpStatus
+from app.research.providers.registry import discovery_providers
 from app.schemas.billing import PackageOut, TopUpOut
+from app.schemas.campaign import ResearchDefaults
 from app.schemas.common import Message, Page
 from app.schemas.marketing import TestimonialOut
 from app.services import credits as credit_svc
-from app.services import receipts
+from app.services import paypal, receipts
+from app.services import providers as provider_svc
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -44,6 +48,22 @@ class SettingsIO(BaseModel):
     credits_per_contact: int = Field(ge=1, le=100)
     payment_instructions_ar: str = Field(default="", max_length=4000)
     payment_instructions_en: str = Field(default="", max_length=4000)
+    research_defaults: ResearchDefaults = Field(default_factory=ResearchDefaults)
+
+    @field_validator("research_defaults", mode="before")
+    @classmethod
+    def _defaults(cls, v: object) -> object:
+        return v or {}  # an empty row means "use the built-in defaults"
+
+    @field_validator("research_defaults")
+    @classmethod
+    def _known_sources(cls, v: ResearchDefaults) -> ResearchDefaults:
+        known = {p.info.key for p in discovery_providers()} - {"demo", "manual", "facebook", "import"}
+        unknown = [k for k in v.sources if k not in known]
+        if unknown:
+            raise ValueError(f"Unknown or user-list sources: {', '.join(unknown)}")
+        v.sources = list(dict.fromkeys(v.sources))
+        return v
 
 
 @router.get("/settings", response_model=SettingsIO)
@@ -57,12 +77,66 @@ async def get_settings_(p: SuperPrincipal, db: DB) -> SettingsIO:
 async def put_settings(body: SettingsIO, p: SuperPrincipal, db: DB) -> SettingsIO:
     s = await credit_svc.platform_settings(db)
     before = SettingsIO.model_validate(s, from_attributes=True).model_dump()
-    for k, v in body.model_dump().items():
+    after = body.model_dump()
+    for k, v in after.items():
         setattr(s, k, v)
-    changed = {k: v for k, v in body.model_dump().items() if before[k] != v}
+    changed = {k: v for k, v in after.items() if before[k] != v}
     await audit(db, p, "admin.settings_updated", "platform_settings", 1, changed)
     await db.commit()
     return body
+
+
+# ---------------------------------------------------------------- PayPal account (services/paypal.py)
+
+
+class PayPalStatus(BaseModel):
+    connected: bool
+    mode: str | None = None
+    client_id: str | None = None  # masked
+    webhook: bool = False
+    webhook_url: str
+
+
+class PayPalConnectIn(BaseModel):
+    client_id: str = Field(min_length=10, max_length=200)
+    client_secret: str = Field(min_length=10, max_length=200)
+    mode: Literal["live", "sandbox"] = "live"
+
+
+def _paypal_status(creds: dict[str, str]) -> PayPalStatus:
+    cid = creds.get("client_id")
+    return PayPalStatus(
+        connected=bool(creds),
+        mode=creds.get("mode") if creds else None,
+        client_id=f"{cid[:6]}…{cid[-4:]}" if cid else None,
+        webhook=bool(creds.get("webhook_id")),
+        webhook_url=paypal.webhook_url(),
+    )
+
+
+@router.get("/paypal", response_model=PayPalStatus)
+async def paypal_status(p: SuperPrincipal, db: DB) -> PayPalStatus:
+    return _paypal_status(await paypal.credentials(db))
+
+
+@router.put("/paypal", response_model=PayPalStatus)
+async def paypal_connect(body: PayPalConnectIn, p: SuperPrincipal, db: DB) -> PayPalStatus:
+    """Check the REST app's credentials with PayPal, register the webhook, and store them encrypted."""
+    creds = await paypal.connect(body.client_id, body.client_secret, body.mode)
+    await provider_svc.save_credentials(db, None, paypal.KEY, {"webhook_id": "", **creds})
+    await audit(db, p, "admin.paypal_connected", "paypal", None, {"mode": body.mode})
+    await db.commit()
+    return _paypal_status(creds)
+
+
+@router.delete("/paypal", response_model=PayPalStatus)
+async def paypal_disconnect(p: SuperPrincipal, db: DB) -> PayPalStatus:
+    await provider_svc.save_credentials(
+        db, None, paypal.KEY, {"client_id": "", "client_secret": "", "mode": "", "webhook_id": ""}
+    )
+    await audit(db, p, "admin.paypal_disconnected", "paypal", None)
+    await db.commit()
+    return _paypal_status({})
 
 
 # ---------------------------------------------------------------- packages
@@ -73,7 +147,7 @@ class PackageIn(BaseModel):
     name_en: str = Field(min_length=1, max_length=120)
     credits: int = Field(ge=1, le=1_000_000)
     price: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
-    currency: str = Field(default="EGP", pattern="^[A-Z]{3}$")
+    currency: str = Field(default="USD", pattern="^[A-Z]{3}$")
     active: bool = True
     sort: int = 0
     featured: bool = False  # shown as "most popular" on the pricing page
@@ -181,6 +255,8 @@ async def _pending_for_review(db: DB, topup_id: uuid.UUID) -> TopUpRequest:
         raise NotFound("Top-up request not found")
     if topup.status != TopUpStatus.PENDING:
         raise Conflict(f"This request was already {topup.status}", code="already_reviewed")
+    if topup.method == PaymentMethod.PAYPAL:  # settled by PayPal itself, never by hand
+        raise Conflict("PayPal payments are confirmed automatically", code="paypal_auto")
     return topup
 
 
