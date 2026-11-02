@@ -33,7 +33,8 @@ def _keep_lock(lock, stop: threading.Event) -> None:  # noqa: ANN001
 @celery_app.task(name="app.workers.tasks.run_campaign", bind=True, max_retries=3, acks_late=True)
 def run_campaign(self, campaign_id: str, run_id: str) -> str | None:  # noqa: ANN001
     """Execute one campaign run. A Redis lock prevents two workers from running the same run concurrently."""
-    lock = sync_redis().lock(f"lock:run:{run_id}", timeout=LOCK_TTL, blocking=False)
+    # thread_local=False: the renewal thread must see this lock's token (redis-py keeps it per thread by default).
+    lock = sync_redis().lock(f"lock:run:{run_id}", timeout=LOCK_TTL, blocking=False, thread_local=False)
     if not lock.acquire(blocking=False):
         log.info("run already executing elsewhere", extra={"run_id": run_id})
         return None
