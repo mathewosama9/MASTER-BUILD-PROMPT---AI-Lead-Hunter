@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from app.models.enums import CrmStatus, SuppressionKind, VerificationStatus
 from app.schemas.common import ORM
@@ -196,10 +196,15 @@ class ContactUpdate(BaseModel):
 
 
 class PitchIn(BaseModel):
-    language: Literal["en", "ar"] = "en"
+    language: Literal["en", "ar"] = "ar"
     tone: Literal["professional", "friendly", "concise", "consultative"] = "professional"
     length: Literal["short", "medium", "long"] = "short"
     service: str | None = None
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def _arabic_only(cls, _: object) -> str:
+        return "ar"  # outreach drafts are Arabic-only
 
 
 class SuppressionIn(BaseModel):

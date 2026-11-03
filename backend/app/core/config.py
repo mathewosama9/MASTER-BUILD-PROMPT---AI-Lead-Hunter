@@ -163,6 +163,7 @@ class Settings(BaseSettings):
 
     rate_limit_default: str = "120/minute"
     # Self-signup: new accounts per client IP per hour (each gets free trial credits).
+    login_limit_per_email: int = 10  # failed or not, per 15 minutes
     signup_limit_per_hour: int = 5
     contact_limit_per_hour: int = 5
     preview_limit_per_hour: int = 120

@@ -18,7 +18,7 @@ type Reason = "empty" | "trial" | "stopped" | "low";
 export function OutOfCredits({ stopped, warnLow, className }: { stopped?: boolean; warnLow?: boolean; className?: string }) {
   const { t, locale } = useI18n();
   const { data: s } = useBillingSummary();
-  if (!s || s.billing_exempt || s.awaiting_verification) return null;
+  if (!s || s.billing_exempt || s.awaiting_verification || s.awaiting_approval) return null;
   const reason: Reason | null = stopped
     ? "stopped"
     : s.on_trial && s.trial_expired

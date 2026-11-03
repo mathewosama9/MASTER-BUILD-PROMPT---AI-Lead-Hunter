@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,7 @@ class BillingSummary(BaseModel):
     trial_expired: bool
     # A self-signup whose free trial starts once the owner confirms their email.
     awaiting_verification: bool = False
+    awaiting_approval: bool = False
     credits_per_contact: int
     low_balance: bool
     pending_topups: int
@@ -48,7 +50,10 @@ class PackageOut(ORM):
 
 class TopUpIn(BaseModel):
     package_id: uuid.UUID
-    method: PaymentMethod
+    # Cash and gifts are recorded by the platform admin only (admin_users.grant_package).
+    method: Literal[
+        PaymentMethod.INSTAPAY, PaymentMethod.BANK_TRANSFER, PaymentMethod.VODAFONE_CASH, PaymentMethod.PAYPAL
+    ]
     reference: str | None = Field(default=None, max_length=200)
     receipt_filename: str = Field(min_length=1, max_length=200)
     # 5 MB file, base64-encoded (~6.7 MB)

@@ -12,7 +12,7 @@ from app.core.redis import async_redis
 from app.models import ContactRequest, CreditPackage, TelegramAccount, User
 from app.models.enums import TelegramLinkStatus
 from app.services.notifications import notify_platform_admins
-from tests.conftest import make_user
+from tests.conftest import deliver_all, make_user
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +96,7 @@ async def test_contact_request_is_saved_and_admins_notified(anon, db, sent):
     assert r.status_code == 201 and r.json() == {"status": "received"}
     row = await db.scalar(select(ContactRequest).where(ContactRequest.email == email))
     assert row and row.interest == "whatsapp_bot" and row.status == "new" and row.company == "Smile Clinic"
+    await deliver_all()
     texts = [p["text"] for _, p in sent]
     assert any("Smile Clinic" in t and email in t and "whatsapp_bot" in t for t in texts)
     assert all(tok == "bot-token" for tok, _ in sent)

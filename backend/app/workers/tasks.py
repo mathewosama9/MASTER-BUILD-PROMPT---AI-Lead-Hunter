@@ -9,9 +9,9 @@ from sqlalchemy import select, update
 from app.core.config import get_settings
 from app.core.db import worker_session
 from app.core.redis import sync_redis
-from app.models import Business, Campaign, CampaignRun, JobEvent
-from app.models.enums import ACTIVE_STATUSES
+from app.models import Business
 from app.research.pipeline import execute_campaign
+from app.services.campaigns import stalled_runs
 from app.workers.celery_app import celery_app
 
 log = logging.getLogger(__name__)
@@ -68,25 +68,7 @@ async def _recover(stale_minutes: int) -> int:
     cutoff = datetime.now(UTC) - timedelta(minutes=stale_minutes)
     count = 0
     async with worker_session() as db:
-        rows = await db.execute(
-            select(CampaignRun.id, CampaignRun.campaign_id)
-            .join(Campaign, Campaign.id == CampaignRun.campaign_id)
-            .where(
-                Campaign.status.in_([s.value for s in ACTIVE_STATUSES]),
-                CampaignRun.finished_at.is_(None),
-                CampaignRun.updated_at <= cutoff,
-                Campaign.deleted_at.is_(None),
-            )
-        )
-        for run_id, campaign_id in rows.all():
-            last_event = await db.scalar(
-                select(JobEvent.created_at)
-                .where(JobEvent.run_id == run_id)
-                .order_by(JobEvent.created_at.desc())
-                .limit(1)
-            )
-            if last_event and last_event > cutoff:
-                continue
+        for run_id, campaign_id in await stalled_runs(db, cutoff):
             run_campaign.delay(str(campaign_id), str(run_id))
             count += 1
     if count:
@@ -120,3 +102,40 @@ async def _retention() -> int:
             total += res.rowcount or 0
         await db.commit()
     return total
+
+
+@celery_app.task(name="app.workers.tasks.deliver_notifications")
+def deliver_notifications() -> dict:
+    """Send the queued emails and Telegram messages. One run at a time across workers: overlapping runs would
+    each think they have the whole email allowance for the minute."""
+    lock = sync_redis().lock("lock:notify-deliver", timeout=60 * 20, blocking=False)
+    if not lock.acquire(blocking=False):
+        return {"skipped": "another delivery run is active"}
+    try:
+        return asyncio.run(_deliver())
+    finally:
+        try:
+            lock.release()
+        except Exception:  # noqa: BLE001 - expired already
+            log.debug("notify lock release skipped")
+
+
+async def _deliver() -> dict:
+    from app.services.notify.broadcast import resume_stale
+    from app.services.notify.delivery import deliver_due
+
+    async with worker_session() as db:
+        await resume_stale(db)
+        return await deliver_due(db)
+
+
+@celery_app.task(name="app.workers.tasks.notification_daily_checks")
+def notification_daily_checks() -> dict:
+    return asyncio.run(_daily_checks())
+
+
+async def _daily_checks() -> dict:
+    from app.services.notify.scheduled import daily
+
+    async with worker_session() as db:
+        return await daily(db)

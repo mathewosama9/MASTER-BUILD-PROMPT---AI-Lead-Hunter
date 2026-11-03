@@ -26,7 +26,7 @@ def user_lang(user_id: int, language_code: str | None) -> str:
     cached = _cache.get(user_id)
     if cached and cached[1].get("locale") in ("ar", "en"):
         return cached[1]["locale"]
-    return "ar" if (language_code or "").startswith("ar") else "en"
+    return "ar"  # Arabic by default, whatever the Telegram app language; /lang switches to English
 
 
 def _saved_lang(user_id: int, me: dict, fallback: str) -> str:

@@ -116,6 +116,7 @@ function WelcomeFlow({ profile }: { profile: Profile }) {
     },
     onError: (e: Error) => {
       if (e instanceof ApiError && e.code === "email_unverified") setNotice(w.verifyFirst);
+      else if (e instanceof ApiError && e.code === "account_pending") setNotice(w.pendingFirst);
       else if (e instanceof ApiError && e.code === "no_sources") setNotice(w.noSources);
       else toast.error(e.message);
     },

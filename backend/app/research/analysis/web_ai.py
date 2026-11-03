@@ -20,6 +20,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.config import get_settings
+from app.research import brave_keys
 
 log = logging.getLogger(__name__)
 
@@ -63,8 +64,12 @@ manager, managing partner, medical director, school principal or the local equiv
 company with a similar name, in another city or country, or who held the role in the past, does not count.
 - Every person must come with the URLs of the pages that state their name together with this business, and a \
 short quote copied from one of those pages.
-- Never guess, transliterate into a new spelling, or complete a partial name. If you cannot find a well-sourced \
-answer, return an empty list. An empty list is a good answer.
+- Prefer the business's own website, official registries, LinkedIn and reputable press. Ignore people who are \
+only staff, customers, reviewers or authors writing about the business.
+- Copy the name in the script and spelling the source uses (Arabic stays Arabic). Never guess, transliterate into \
+a new spelling, or complete a partial name. If you cannot find a well-sourced answer, return an empty list. An \
+empty list is a good answer; a wrong person is a bad one.
+- At most 3 people, most senior first. role is their title at this business as the source states it.
 - Reply with exactly one JSON object and nothing else:
 {"people": [{"name": "...", "role": "...", "quote": "...", "source_urls": ["https://..."]}]}"""
 
@@ -147,14 +152,22 @@ def _answer(provider: str, data: dict, fallback_cost: float) -> WebAnswer:
 # ---------------------------------------------------------------------------------------------- adapters
 
 
+class KeyFailed(RuntimeError):
+    """This key is rejected, out of balance or rate limited; the next key may still work."""
+
+    def __init__(self, message: str, rest: float) -> None:
+        super().__init__(message)
+        self.rest = rest
+
+
 async def _post(client: httpx.AsyncClient, provider: str, url: str, body: dict, headers: dict) -> dict:
     resp = await client.post(url, json=body, headers=headers)
     if resp.status_code in (401, 403):
-        raise PermissionError(f"{provider} rejected the API key")
+        raise KeyFailed(f"{provider} rejected the API key", brave_keys.REJECTED_REST)
     if resp.status_code == 402:
-        raise PermissionError(f"{provider} account has no balance")
+        raise KeyFailed(f"{provider} account has no balance", brave_keys.QUOTA_REST)
     if resp.status_code == 429:
-        raise RuntimeError(f"{provider} rate limit reached")
+        raise KeyFailed(f"{provider} rate limit reached", brave_keys.RATE_LIMIT_REST)
     if resp.status_code >= 400:
         raise RuntimeError(f"{provider} error {resp.status_code}: {resp.text[:200]}")
     return resp.json()
@@ -224,8 +237,16 @@ async def ask_council(
 
         async def one(provider: str) -> WebAnswer:
             try:
-                return await ADAPTERS[provider](client, keys[provider], prompt)
-            except (httpx.HTTPError, PermissionError, RuntimeError, ValueError) as exc:
+                # The credential may hold several keys (one per line), used in turn like Brave's.
+                failed: RuntimeError = RuntimeError(f"{provider} has no API key")
+                for key in brave_keys.ordered(brave_keys.split_keys(keys[provider])):
+                    try:
+                        return await ADAPTERS[provider](client, key, prompt)
+                    except KeyFailed as exc:
+                        brave_keys.rest(key, exc.rest)
+                        failed = exc
+                raise failed
+            except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                 log.info("council member failed", extra={"provider": provider, "error": str(exc)[:200]})
                 return WebAnswer(provider, error=str(exc)[:300])
 

@@ -4,7 +4,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from bot.handlers import billing, campaigns, errors, leads, menu, wizard
+from bot.handlers import admin, billing, campaigns, errors, leads, menu, wizard
 from bot.middleware import AuthMiddleware
 from bot.services.api import BackendClient
 
@@ -16,7 +16,9 @@ def build_dispatcher(api: BackendClient, storage: BaseStorage | None = None) -> 
     dp.callback_query.outer_middleware(auth)
     # Commands first so /start, /cancel… work from inside any flow; the wizard holds the plain-text search
     # catch-all; errors last (stale buttons and the error handler).
-    dp.include_routers(menu.router, campaigns.router, leads.router, billing.router, wizard.router, errors.router)
+    dp.include_routers(
+        menu.router, admin.router, campaigns.router, leads.router, billing.router, wizard.router, errors.router
+    )
     dp.workflow_data["auth"] = auth
     return dp
 

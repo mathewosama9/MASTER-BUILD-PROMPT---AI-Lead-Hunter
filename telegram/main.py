@@ -31,9 +31,9 @@ SHORT_DESCRIPTION = {"en": "Ready clients for your business, on Telegram.", "ar"
 
 
 async def _setup_profile(bot) -> None:
-    """Menu commands and the bot's About texts in both languages (Telegram picks by the user's app language)."""
+    """Menu commands and the bot's About texts: Arabic by default, English for English-language Telegram apps."""
     for lang, items in COMMANDS.items():
-        code = None if lang == "en" else lang
+        code = None if lang == "ar" else lang
         try:
             await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in items], language_code=code)
             await bot.set_my_description(DESCRIPTION[lang], language_code=code)

@@ -54,8 +54,8 @@ function ProviderCard({ p, canEdit }: { p: Provider; canEdit: boolean }) {
     onError: (e: Error) => toast.error(e.message),
   });
   const fields = p.requires.filter((r) => r !== "manual_urls");
-  // Brave takes several API keys (one per line), used in turn by the backend.
-  const multiKey = p.key === "brave";
+  // Brave, Gemini and Perplexity take several API keys (one per line), used in turn by the backend.
+  const multiKey = ["brave", "gemini", "perplexity"].includes(p.key);
   return (
     <Card>
       <CardHeader>

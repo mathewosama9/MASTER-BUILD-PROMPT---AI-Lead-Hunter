@@ -113,6 +113,24 @@ class TelegramLinkStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class ApprovalStatus(StrEnum):
+    """Platform admin review of a self-signup (services/signup_review.py)."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class SignalKind(StrEnum):
+    """What two accounts can share that suggests one person behind both."""
+
+    DEVICE = "device"  # long-lived browser cookie
+    FINGERPRINT = "fingerprint"  # browser/hardware traits hashed in the page
+    PHONE = "phone"
+    EMAIL = "email"  # the address with +tags (and Gmail dots) removed
+    IP = "ip"
+
+
 class CreditKind(StrEnum):
     TRIAL_GRANT = "trial_grant"
     PURCHASE = "purchase"
@@ -146,6 +164,9 @@ class PaymentMethod(StrEnum):
     BANK_TRANSFER = "bank_transfer"
     VODAFONE_CASH = "vodafone_cash"
     PAYPAL = "paypal"
+    # Recorded by the platform admin when granting a package by hand (paid outside the site, or a gift).
+    CASH = "cash"
+    COMPLIMENTARY = "complimentary"
 
 
 class TestimonialSource(StrEnum):
@@ -158,3 +179,16 @@ class TestimonialStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     HIDDEN = "hidden"
+
+
+class NotifyChannel(StrEnum):
+    IN_APP = "in_app"
+    EMAIL = "email"
+    TELEGRAM = "telegram"
+
+
+class DeliveryStatus(StrEnum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+    SKIPPED = "skipped"  # the channel became unusable before sending (unlinked Telegram, no SMTP...)

@@ -3,12 +3,12 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import AppError, Conflict, NotFound
-from app.models import Campaign, CampaignLead, CampaignRun, CampaignSource, Workspace
+from app.models import Campaign, CampaignLead, CampaignRun, CampaignSource, JobEvent, Workspace
 from app.models.enums import ACTIVE_STATUSES, CampaignStatus, ProviderStatus, Stage
 from app.research.pipeline import DEFAULT_SETTINGS, start_new_run
 from app.schemas.campaign import CampaignCreate, ResearchDefaults, ResearchSettings, SourceIn
@@ -23,6 +23,25 @@ def dispatch_run(campaign_id: uuid.UUID, run_id: uuid.UUID) -> str | None:
 
     result = run_campaign.apply_async(args=[str(campaign_id), str(run_id)], queue="research")
     return result.id
+
+
+async def stalled_runs(db: AsyncSession, cutoff: datetime) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    """(run_id, campaign_id) of active runs with no progress since `cutoff`: neither the run row nor an event."""
+    last_event = (
+        select(func.max(JobEvent.created_at)).where(JobEvent.run_id == CampaignRun.id).correlate(CampaignRun)
+    ).scalar_subquery()
+    rows = await db.execute(
+        select(CampaignRun.id, CampaignRun.campaign_id)
+        .join(Campaign, Campaign.id == CampaignRun.campaign_id)
+        .where(
+            Campaign.status.in_([s.value for s in ACTIVE_STATUSES]),
+            CampaignRun.finished_at.is_(None),
+            CampaignRun.updated_at <= cutoff,
+            Campaign.deleted_at.is_(None),
+            or_(last_event.is_(None), last_event <= cutoff),
+        )
+    )
+    return [(r, c) for r, c in rows.all()]
 
 
 async def get_campaign(db: AsyncSession, workspace_id: uuid.UUID, campaign_id: uuid.UUID) -> Campaign:

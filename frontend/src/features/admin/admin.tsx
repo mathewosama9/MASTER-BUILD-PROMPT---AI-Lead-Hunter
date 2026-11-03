@@ -2,7 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Activity,
   BarChart3,
+  Bell,
   Building2,
   Check,
   ExternalLink,
@@ -13,10 +15,12 @@ import {
   Package,
   Pencil,
   Plus,
+  Radar,
   CreditCard,
   Settings2,
   ShieldCheck,
   ShieldOff,
+  Users,
   Wallet,
   X,
 } from "lucide-react";
@@ -46,10 +50,13 @@ import { cn, formatDate, formatNumber, formatPrice } from "@/lib/utils";
 import type { CreditPackage, Page, TopUp, TopUpStatus } from "@/types/api";
 
 import { type AdminTab, AdminOverviewTab, UsageTab } from "./insights";
+import { NotificationsAdmin } from "./notifications";
+import { ActivityAdmin, CsvButton, JobsAdmin } from "./ops";
 import { PayPalConnect } from "./paypal-connect";
 import { ProvidersAdmin } from "./providers";
 import { type ResearchDefaults, ResearchDefaultsEditor, researchDefaultsValid } from "./research-settings";
 import { TestimonialsAdmin } from "./testimonials";
+import { UsersAdmin } from "./users";
 
 interface AdminTopUp extends TopUp {
   workspace_id: string;
@@ -80,6 +87,7 @@ interface PlatformSettings {
   credits_per_contact: number;
   payment_instructions_ar: string;
   payment_instructions_en: string;
+  signup_review: boolean;
   research_defaults: ResearchDefaults;
 }
 interface ContactRequest {
@@ -100,7 +108,9 @@ const onError = (e: Error) => toast.error(e.message);
 
 const TABS: { key: AdminTab; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "overview", icon: LayoutDashboard },
+  { key: "users", icon: Users },
   { key: "topups", icon: Wallet },
+  { key: "jobs", icon: Radar },
   { key: "workspaces", icon: Building2 },
   { key: "packages", icon: Package },
   { key: "contacts", icon: Inbox },
@@ -108,6 +118,8 @@ const TABS: { key: AdminTab; icon: React.ComponentType<{ className?: string }> }
   { key: "providers", icon: KeyRound },
   { key: "usage", icon: BarChart3 },
   { key: "payments", icon: CreditCard },
+  { key: "notifications", icon: Bell },
+  { key: "activity", icon: Activity },
   { key: "settings", icon: Settings2 },
 ];
 
@@ -143,7 +155,10 @@ export function AdminPage() {
         </nav>
         <div className="min-w-0">
           {tab === "overview" ? <AdminOverviewTab go={setTab} /> : null}
+          {tab === "users" ? <UsersAdmin /> : null}
           {tab === "topups" ? <TopUps /> : null}
+          {tab === "jobs" ? <JobsAdmin /> : null}
+          {tab === "activity" ? <ActivityAdmin /> : null}
           {tab === "workspaces" ? <Workspaces /> : null}
           {tab === "packages" ? <Packages /> : null}
           {tab === "contacts" ? <Contacts /> : null}
@@ -151,6 +166,7 @@ export function AdminPage() {
           {tab === "providers" ? <ProvidersAdmin /> : null}
           {tab === "usage" ? <UsageTab /> : null}
           {tab === "payments" ? <PayPalConnect /> : null}
+          {tab === "notifications" ? <NotificationsAdmin /> : null}
           {tab === "settings" ? <SettingsForm /> : null}
         </div>
       </div>
@@ -202,6 +218,9 @@ function TopUps() {
               {s ? label(s) : t.admin.all}
             </Button>
           ))}
+          <div className="ms-auto">
+            <CsvButton path="/admin/exports/payments.csv" query={{ status: status || undefined }} />
+          </div>
         </div>
         {q.isLoading ? (
           <LoadingState rows={3} />
@@ -707,6 +726,9 @@ function SettingsEditor({ initial, onSaved }: { initial: PlatformSettings; onSav
           </Field>
         </div>
         <p className="text-xs text-muted-foreground">{t.admin.settingsHint}</p>
+        <Field label={t.admin.signupReview} htmlFor="st_review" hint={t.admin.signupReviewHint}>
+          <Switch id="st_review" checked={s.signup_review} onCheckedChange={(v) => setS({ ...s, signup_review: v })} />
+        </Field>
         <Button disabled={!valid || save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? <Spinner /> : null} {t.common.save}
         </Button>

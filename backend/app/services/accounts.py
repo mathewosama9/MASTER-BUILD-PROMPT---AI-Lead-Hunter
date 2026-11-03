@@ -5,7 +5,6 @@ Both links carry signed, expiring tokens (see core/security.py), not database ro
 - verify: bound to the email address it was sent to.
 """
 
-import html
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -18,9 +17,10 @@ from app.core.config import get_settings
 from app.core.db import get_sessionmaker
 from app.core.security import create_purpose_token, decode_purpose_token, password_fingerprint
 from app.models import User, Workspace, WorkspaceMember
-from app.models.enums import Role
+from app.models.enums import ApprovalStatus, Role
 from app.services import credits as credit_svc
 from app.services.mailer import send_email
+from app.services.notify.templates import email_layout
 
 log = logging.getLogger(__name__)
 
@@ -48,12 +48,18 @@ _TEXT = {
         "en": {
             "subject": "Confirm your email for Rasd",
             "intro": "Welcome, {name}. Confirm {email} to activate your account and your free trial credits.",
+            # A signup waiting for the platform admin: say so, so nobody waits for credits after confirming.
+            "intro_pending": "Welcome, {name}. We received your sign-up and our team is reviewing it (we keep one "
+            "free trial per person). Confirm {email} now; your free trial credits are added as soon as the account "
+            "is approved, and we'll email you then.",
             "action": "Confirm my email",
             "outro": "The link expires in {hours} hours. If you didn't create an account, ignore this email.",
         },
         "ar": {
             "subject": "أكّد بريدك الإلكتروني في رصد",
             "intro": "أهلاً {name}. أكّد البريد {email} لتفعيل حسابك ورصيد التجربة المجانية.",
+            "intro_pending": "أهلاً {name}. استلمنا طلب تسجيلك وفريقنا يراجعه الآن (التجربة المجانية مرة واحدة لكل "
+            "شخص). أكّد البريد {email} الآن، وتُضاف نقاط التجربة فور الموافقة على الحساب، وسنراسلك وقتها.",
             "action": "تأكيد البريد",
             "outro": "ينتهي الرابط خلال {hours} ساعة. إذا لم تنشئ حساباً فتجاهل هذه الرسالة.",
         },
@@ -71,19 +77,10 @@ def _render(kind: str, user: User, link: str) -> tuple[str, str, str]:
         "minutes": s.password_reset_minutes,
         "hours": s.email_verify_hours,
     }
-    intro, outro = t["intro"].format(**values), t["outro"].format(**values)
+    intro_key = "intro_pending" if kind == "verify" and user.approval_status == ApprovalStatus.PENDING else "intro"
+    intro, outro = t[intro_key].format(**values), t["outro"].format(**values)
     text = f"{intro}\n\n{t['action']}:\n{link}\n\n{outro}\n\nرصد · Rasd"
-    direction = "rtl" if lang == "ar" else "ltr"
-    body = f"""<!doctype html>
-<html lang="{lang}" dir="{direction}"><body style="margin:0;background:#f7f7f2;font-family:Arial,sans-serif">
-<div style="max-width:520px;margin:24px auto;background:#fff;border-radius:12px;padding:28px;color:#071a17">
-<p style="font-size:15px;line-height:1.6">{html.escape(intro)}</p>
-<p style="margin:28px 0"><a href="{html.escape(link)}" style="background:#071a17;color:#c8f169;padding:12px 22px;
-border-radius:8px;text-decoration:none;font-weight:bold">{html.escape(t["action"])}</a></p>
-<p style="font-size:13px;line-height:1.6;color:#4b5f58">{html.escape(outro)}</p>
-<p style="font-size:12px;color:#6f8a82;word-break:break-all">{html.escape(link)}</p>
-<p style="font-size:12px;color:#6f8a82">رصد · Rasd</p>
-</div></body></html>"""
+    body = email_layout(lang, intro, action=t["action"], link=link, outro=outro)
     return t["subject"], text, body
 
 
@@ -128,11 +125,19 @@ async def send_verification(user_id: uuid.UUID) -> None:
 
 
 async def mark_verified(db: AsyncSession, user: User) -> bool:
-    """Confirm the user's email (caller holds the user row lock and commits). The first confirmation starts the
-    free trial of each self-signup workspace the user owns that hasn't had one. Returns False if already done."""
+    """Confirm the user's email (caller holds the user row lock and commits). Once the admin has also approved the
+    account, the first confirmation starts the free trial. Returns False if already done."""
     if user.email_verified_at is not None:
         return False
     user.email_verified_at = datetime.now(UTC)
+    if user.approval_status == ApprovalStatus.APPROVED:
+        await start_owner_trials(db, user)
+    return True
+
+
+async def start_owner_trials(db: AsyncSession, user: User) -> None:
+    """Start the free trial of each self-signup workspace the user owns that hasn't had one. A trial needs both a
+    confirmed email and an approved account; whichever comes last calls this."""
     workspaces = await db.scalars(
         select(Workspace)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
@@ -147,4 +152,3 @@ async def mark_verified(db: AsyncSession, user: User) -> bool:
     )
     for ws in workspaces.all():
         await credit_svc.start_trial(db, ws, created_by=user.id)
-    return True

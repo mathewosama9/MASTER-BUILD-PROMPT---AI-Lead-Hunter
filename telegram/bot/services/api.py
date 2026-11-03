@@ -132,3 +132,21 @@ class BackendClient:
 
     async def create_topup(self, uid: int, body: dict) -> dict:
         return await self.json("POST", "/billing/topups", uid, json=body)
+
+    # Platform admin: signup review --------------------------------------------------------------
+
+    async def users_summary(self, uid: int) -> dict:
+        return await self.json("GET", "/admin/users/summary", uid)
+
+    async def admin_users(self, uid: int, page: int = 1, page_size: int = 6, **params: Any) -> dict:
+        query = {"page": page, "page_size": page_size, **{k: v for k, v in params.items() if v is not None}}
+        return await self.json("GET", "/admin/users", uid, params=query)
+
+    async def admin_user(self, uid: int, user_id: str) -> dict:
+        return await self.json("GET", f"/admin/users/{user_id}", uid)
+
+    async def approve_user(self, uid: int, user_id: str) -> dict:
+        return await self.json("POST", f"/admin/users/{user_id}/approve", uid)
+
+    async def reject_user(self, uid: int, user_id: str, reason: str) -> dict:
+        return await self.json("POST", f"/admin/users/{user_id}/reject", uid, json={"reason": reason})

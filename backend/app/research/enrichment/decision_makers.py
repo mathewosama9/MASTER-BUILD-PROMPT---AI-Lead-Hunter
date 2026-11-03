@@ -609,8 +609,11 @@ Rules:
 - Return only people whose full name AND role (owner, founder, CEO, general manager, medical director,
   director, partner, manager...) are both written in the text. Copy name and role exactly as written.
 - `quote` must be copied verbatim from the text and contain the name.
+- Only people who hold the role at THIS business today; skip former roles and people of other companies
+  (partners, clients, suppliers, award bodies).
 - Never guess, translate, complete or invent names. Return an empty list when nobody is named with a role.
-- Ignore customers, reviewers, authors of testimonials and job openings."""
+- Ignore customers, reviewers, authors of testimonials and job openings.
+- List each person once, most senior first."""
 
 
 async def extract_with_ai(ai, business_name: str, pages: list[tuple[str, str]]) -> tuple[list[DecisionMaker], float]:

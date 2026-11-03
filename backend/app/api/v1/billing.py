@@ -5,14 +5,13 @@ import math
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import undefer
 
 from app.api.deps import DB, CurrentPrincipal, audit, require_role
-from app.core.db import get_sessionmaker
 from app.core.errors import AppError, Conflict, NotFound
-from app.models import CreditPackage, CreditTransaction, TopUpRequest, Workspace
+from app.models import CreditPackage, CreditTransaction, Notification, TopUpRequest, Workspace
 from app.models.enums import PaymentMethod, Role, TopUpStatus
 from app.schemas.billing import (
     BillingSummary,
@@ -27,7 +26,8 @@ from app.schemas.billing import (
 from app.schemas.common import Page
 from app.services import credits as credit_svc
 from app.services import paypal, receipts
-from app.services.notifications import notify_platform_admins
+from app.services.notify import events as notify_events
+from app.services.notify import notify, notify_admins
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -55,6 +55,7 @@ async def summary(p: CurrentPrincipal, db: DB) -> BillingSummary:
     )
     paypal_enabled = bool(await paypal.credentials(db))
     awaiting = await credit_svc.awaiting_verification(db, ws)
+    awaiting_approval = await credit_svc.awaiting_approval(db, ws)
     await db.commit()  # persists the default settings row the first time
     return BillingSummary(
         billing_exempt=ws.billing_exempt,
@@ -64,6 +65,7 @@ async def summary(p: CurrentPrincipal, db: DB) -> BillingSummary:
         trial_days_left=days_left,
         trial_expired=bool(on_trial and ws.trial_ends_at and ws.trial_ends_at <= now),
         awaiting_verification=awaiting,
+        awaiting_approval=awaiting_approval,
         credits_per_contact=settings.credits_per_contact,
         low_balance=not ws.billing_exempt and ws.credit_balance < credit_svc.LOW_BALANCE_CREDITS,
         pending_topups=int(pending or 0),
@@ -106,7 +108,7 @@ async def packages(p: CurrentPrincipal, db: DB) -> list[PackageOut]:
 
 
 @router.post("/topups", response_model=TopUpOut, status_code=201, dependencies=[require_role(Role.ADMIN)])
-async def request_topup(body: TopUpIn, p: CurrentPrincipal, db: DB, background: BackgroundTasks) -> TopUpOut:
+async def request_topup(body: TopUpIn, p: CurrentPrincipal, db: DB) -> TopUpOut:
     """Legacy: the client paid outside the app (InstaPay / bank / Vodafone Cash) and uploads the receipt for
     review. The dashboard sells through PayPal checkout now; this stays for existing API clients."""
     if body.method == PaymentMethod.PAYPAL:
@@ -139,23 +141,24 @@ async def request_topup(body: TopUpIn, p: CurrentPrincipal, db: DB, background: 
     db.add(topup)
     await db.flush()
     await audit(db, p, "billing.topup_requested", "topup", topup.id, {"package": str(package.id)})
-    await db.commit()
     ws = await db.get(Workspace, p.workspace_id)
-    background.add_task(
-        _notify_topup,
-        f"💳 New top-up request\nWorkspace: {ws.name if ws else p.workspace_id}\nBy: {p.user.email}\n"
-        f"Package: {package.name_en} ({package.credits} credits)\nAmount: {package.price} {package.currency}\n"
-        f"Method: {body.method}\nReference: {topup.reference or '—'}\nReview it in the admin dashboard.",
+    await notify_admins(
+        db,
+        "admin_topup_request",
+        {
+            "workspace": ws.name if ws else "",
+            "email": p.user.email,
+            "package": package.name_en,
+            "credits": package.credits,
+            "amount": f"{package.price:.2f}",
+            "currency": package.currency,
+            "method": body.method,
+            "reference": topup.reference or "—",
+        },
+        link="/app/admin?tab=topups",
     )
+    await db.commit()
     return TopUpOut.model_validate(topup)
-
-
-async def _notify_topup(text: str) -> None:
-    async with get_sessionmaker()() as db:
-        try:
-            await notify_platform_admins(db, text)
-        except Exception:  # noqa: BLE001 - the request is saved either way
-            log.warning("top-up notification failed", exc_info=True)
 
 
 # ---------------------------------------------------------------- PayPal checkout (services/paypal.py)
@@ -206,17 +209,54 @@ async def _own_order(db: DB, p: CurrentPrincipal, order_id: str) -> TopUpRequest
 
 
 @router.post("/paypal/capture", response_model=TopUpOut, dependencies=[require_role(Role.ADMIN)])
-async def paypal_capture(body: PayPalOrderRef, p: CurrentPrincipal, db: DB, background: BackgroundTasks) -> TopUpOut:
+async def paypal_capture(body: PayPalOrderRef, p: CurrentPrincipal, db: DB) -> TopUpOut:
     """The client is back from PayPal: capture the payment and add the credits."""
     topup = await _own_order(db, p, body.order_id)
     if topup.status == TopUpStatus.PENDING:
-        order = await paypal.capture_order(await paypal.require_credentials(db), body.order_id)
-        topup, granted = await paypal.settle(db, body.order_id, order)
+        try:
+            order = await paypal.capture_order(await paypal.require_credentials(db), body.order_id)
+            topup, granted = await paypal.settle(db, body.order_id, order)
+        except paypal.PayPalError as exc:
+            await db.rollback()
+            if exc.code in PAYMENT_DECLINED:
+                await _payment_failed(db, body.order_id)
+            raise
         await audit(db, p, "billing.paypal_captured", "topup", topup.id, {"order": body.order_id})
-        await db.commit()
         if granted:
-            background.add_task(_notify_paid, topup.id)
+            await notify_events.payment_received(db, topup, manual=False)
+        await db.commit()
     return TopUpOut.model_validate(topup)
+
+
+# PayPal answered and the payment did not go through. Not for "could not reach PayPal": that payment may still
+# complete (the webhook settles it), so telling the client it failed would be wrong.
+PAYMENT_DECLINED = {"paypal_not_completed", "paypal_amount_mismatch"}
+
+
+async def _payment_failed(db: DB, order_id: str) -> None:
+    """Tell the client once per order, however many times the return page retries the capture."""
+    topup = await db.scalar(select(TopUpRequest).where(TopUpRequest.provider_order_id == order_id))
+    if topup is None:
+        return
+    told = await db.scalar(
+        select(Notification.id)
+        .where(
+            Notification.workspace_id == topup.workspace_id,
+            Notification.kind == "payment_failed",
+            Notification.params["order_id"].as_string() == order_id,
+        )
+        .limit(1)
+    )
+    if told:
+        return
+    await notify(
+        db,
+        "payment_failed",
+        workspace_id=topup.workspace_id,
+        params={"amount": f"{topup.amount:.2f}", "currency": topup.currency, "order_id": order_id},
+        link="/app/billing",
+    )
+    await db.commit()
 
 
 @router.post("/paypal/cancel", response_model=TopUpOut, dependencies=[require_role(Role.ADMIN)])
@@ -232,7 +272,7 @@ async def paypal_cancel(body: PayPalOrderRef, p: CurrentPrincipal, db: DB) -> To
 
 
 @webhook_router.post("/paypal/webhook", include_in_schema=False)
-async def paypal_webhook(request: Request, db: DB, background: BackgroundTasks) -> dict:
+async def paypal_webhook(request: Request, db: DB) -> dict:
     """Backup for a client who paid but never came back to the dashboard. Verified with PayPal; no session."""
     creds = await paypal.credentials(db)
     event = await request.json()
@@ -253,27 +293,10 @@ async def paypal_webhook(request: Request, db: DB, background: BackgroundTasks) 
         return {"ok": True}  # not ours, or already settled / cancelled
     order = await paypal.capture_order(creds, order_id)
     topup, granted = await paypal.settle(db, order_id, order)
-    await db.commit()
     if granted:
-        background.add_task(_notify_paid, topup.id)
+        await notify_events.payment_received(db, topup, manual=False)
+    await db.commit()
     return {"ok": True}
-
-
-async def _notify_paid(topup_id: uuid.UUID) -> None:
-    async with get_sessionmaker()() as db:
-        topup = await db.get(TopUpRequest, topup_id)
-        if topup is None:
-            return
-        ws = await db.get(Workspace, topup.workspace_id)
-        try:
-            await notify_platform_admins(
-                db,
-                f"✅ PayPal payment received\nWorkspace: {ws.name if ws else topup.workspace_id}\n"
-                f"Amount: {topup.amount} {topup.currency} · {topup.credits} credits added\n"
-                f"Order: {topup.provider_order_id}",
-            )
-        except Exception:  # noqa: BLE001 - the payment is recorded either way
-            log.warning("payment notification failed", exc_info=True)
 
 
 @router.get("/topups", response_model=list[TopUpOut])

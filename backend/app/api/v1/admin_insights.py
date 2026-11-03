@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import and_, func, select
 
 from app.api.deps import DB, SuperPrincipal
+from app.api.v1.admin_ops import health_summary
 from app.models import (
     Business,
     Campaign,
@@ -23,7 +24,7 @@ from app.models import (
     Workspace,
     WorkspaceMember,
 )
-from app.models.enums import CreditKind, Role, TestimonialSource, TestimonialStatus, TopUpStatus
+from app.models.enums import ApprovalStatus, CreditKind, Role, TestimonialSource, TestimonialStatus, TopUpStatus
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -98,6 +99,15 @@ async def overview(p: SuperPrincipal, db: DB) -> dict:
     new_contacts = (
         await db.scalar(select(func.count()).select_from(ContactRequest).where(ContactRequest.status == "new")) or 0
     )
+    health = await health_summary(db)
+    pending_signups = (
+        await db.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(User.approval_status == ApprovalStatus.PENDING, User.deleted_at.is_(None))
+        )
+        or 0
+    )
     pending_reviews = (
         await db.scalar(
             select(func.count()).select_from(Testimonial).where(Testimonial.status == TestimonialStatus.PENDING)
@@ -169,6 +179,9 @@ async def overview(p: SuperPrincipal, db: DB) -> dict:
         "credits_used_30d": int(credits_30d),
         "attention": {
             "pending_topups": pending_topups,
+            "pending_signups": pending_signups,
+            "stuck_campaigns": health.stuck,
+            "failed_campaigns_7d": health.failed_7d,
             "new_contacts": new_contacts,
             "pending_reviews": pending_reviews,
             "sample_reviews": sample_reviews,

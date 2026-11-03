@@ -6,6 +6,8 @@ c:<action>:<id|page>  campaigns (c:prog/pause/resume/cancel/retry/res/top/csv ar
 l:<action>:...        leads: l:p:<page>:<qualified 0|1>[:<campaign>], l:v:<id>, l:s:<id>, l:st:<id>:<status>,
                       l:n:<id>, l:back
 b:<action>[:<value>]  credits: b:bal, b:pkgs, b:pkg:<id>, b:mth:<method>, b:skipref, b:cancel
+adm:<action>:...      platform admin signup review: adm:home, adm:list:<p|s>:<page>, adm:u:<user>,
+                      adm:ok:<user>, adm:no:<user>, adm:nr:<user>:<dup|fake|x> (adm:ok/no/u also sent by the backend)
 """
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -38,13 +40,15 @@ def menu_row(lang: str) -> list[InlineKeyboardButton]:
     return [_btn(t("menu", lang), "m:menu")]
 
 
-def main_menu(lang: str) -> InlineKeyboardMarkup:
+def main_menu(lang: str, admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [_btn(t("btn_new", lang), "m:new")],
         [_btn(t("btn_mine", lang), "m:mine"), _btn(t("btn_top", lang), "m:top")],
         [_btn(t("btn_balance", lang), "b:bal"), _btn(t("btn_export", lang), "m:export")],
         [_btn(t("btn_settings", lang), "m:settings"), _btn(t("btn_help", lang), "m:help")],
     ]
+    if admin:
+        rows.append([_btn(t("btn_admin", lang), "adm:home")])
     dash = dashboard_button(lang)
     if dash:
         rows.append([dash])
@@ -318,3 +322,50 @@ def price_text(value: object) -> str:
     except (TypeError, ValueError):
         return str(value)
     return f"{f:,.0f}" if f == int(f) else f"{f:,.2f}"
+
+
+# Platform admin ----------------------------------------------------------------------------------------
+
+def admin_home_kb(summary: dict, lang: str) -> InlineKeyboardMarkup:
+    rows = [[_btn(t("btn_pending", lang, n=summary.get("pending", 0)), "adm:list:p:0")],
+            [_btn(t("btn_suspects", lang, n=summary.get("suspicious", 0)), "adm:list:s:0")]]
+    url = web_url("/app/admin?tab=users")
+    if url:
+        rows.append([InlineKeyboardButton(text=t("btn_admin_web", lang), url=url)])
+    rows.append(menu_row(lang))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_list_kb(items: list[dict], which: str, page: int, pages: int, lang: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for u in items:
+        flag = "⚠️ " if u.get("strong_matches") else ""
+        b.row(_btn(f"{flag}{u.get('full_name') or u['email']} · {u['email']}"[:60], f"adm:u:{u['id']}"))
+    _pager(b, f"adm:list:{which}", page, pages, lang)
+    b.row(_btn(t("back", lang), "adm:home"))
+    return b.as_markup()
+
+
+def admin_user_kb(user: dict, lang: str) -> InlineKeyboardMarkup:
+    uid, status = user["id"], user["approval_status"]
+    rows = []
+    if status == "pending":
+        rows.append([_btn(t("btn_approve", lang), f"adm:ok:{uid}"), _btn(t("btn_reject", lang), f"adm:no:{uid}")])
+    elif status == "rejected":
+        rows.append([_btn(t("btn_readmit", lang), f"adm:ok:{uid}")])
+    elif not user.get("is_superuser"):
+        rows.append([_btn(t("btn_reject", lang), f"adm:no:{uid}")])
+    url = web_url(f"/app/admin?tab=users&user={uid}")
+    if url:
+        rows.append([InlineKeyboardButton(text=t("btn_admin_web", lang), url=url)])
+    rows.append([_btn(t("back", lang), "adm:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def reject_reasons_kb(uid: str, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [_btn(t("reason_dup", lang), f"adm:nr:{uid}:dup")],
+        [_btn(t("reason_fake", lang), f"adm:nr:{uid}:fake")],
+        [_btn(t("reason_other", lang), f"adm:nr:{uid}:x")],
+        [_btn(t("back", lang), f"adm:u:{uid}")],
+    ])

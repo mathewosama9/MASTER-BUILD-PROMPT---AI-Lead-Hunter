@@ -14,6 +14,7 @@ from app.core.errors import Conflict, NotFound, Unauthorized
 from app.core.security import constant_time_equals, hash_code
 from app.models import TelegramAccount, TelegramLinkCode, User, WorkspaceMember
 from app.models.enums import Role, TelegramLinkStatus
+from app.services.notify import notify
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 CODE_TTL_MINUTES = 10
@@ -24,7 +25,7 @@ class LinkIn(BaseModel):
     telegram_user_id: int
     chat_id: int
     username: str | None = Field(default=None, max_length=64)
-    locale: str = "en"
+    locale: str = "ar"  # the bot speaks Arabic unless the user picks English
 
 
 def _require_service(request: Request) -> None:
@@ -89,8 +90,44 @@ async def link_account(body: LinkIn, request: Request, db: DB) -> dict:
     if auto_approve:
         account.approved_at = now
         account.approved_by = code.user_id
+        await db.flush()
+        await _linked(db, account, from_bot=True)
     await db.commit()
     return {"status": account.status}
+
+
+async def link_states(db: DB, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[str, str | None]]:
+    """(status, username) of each user's live Telegram link; an approved account wins over a pending one."""
+    if not user_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(TelegramAccount.user_id, TelegramAccount.status, TelegramAccount.username).where(
+                TelegramAccount.user_id.in_(user_ids), TelegramAccount.status != TelegramLinkStatus.REVOKED
+            )
+        )
+    ).all()
+    out: dict[uuid.UUID, tuple[str, str | None]] = {}
+    for uid, status, username in rows:
+        state = "linked" if status == TelegramLinkStatus.APPROVED else "pending"
+        if uid not in out or (state == "linked" and out[uid][0] != "linked"):
+            out[uid] = (state, username)
+    return out
+
+
+async def _linked(db: DB, account: TelegramAccount, *, from_bot: bool = False) -> None:
+    user = await db.get(User, account.user_id)
+    if user is not None:
+        name = f" (@{account.username})" if account.username else ""
+        await notify(
+            db,
+            "telegram_linked",
+            users=[user],
+            params={"username": name},
+            link="/app/settings?tab=telegram",
+            # The bot already confirmed in that chat; an admin's later approval is news there.
+            skip_channels={"telegram"} if from_bot else (),
+        )
 
 
 @router.get("/whoami")
@@ -100,6 +137,7 @@ async def whoami(p: CurrentPrincipal) -> dict:
         "user": p.user.email,
         "name": p.user.full_name,
         "role": p.role,
+        "is_superuser": p.user.is_superuser,  # shows the admin menu (signup review)
         "workspace_id": str(p.workspace_id),
         "locale": p.telegram_account.locale if p.telegram_account else p.user.locale,
         "demo_mode": get_settings().demo_mode,
@@ -168,6 +206,8 @@ async def approve(account_id: uuid.UUID, p: CurrentPrincipal, db: DB) -> dict:
     a.approved_by = p.user.id
     a.approved_at = datetime.now(UTC)
     await audit(db, p, "telegram.approved", "telegram_account", a.id)
+    await db.flush()
+    await _linked(db, a)
     await db.commit()
     return {"status": a.status}
 

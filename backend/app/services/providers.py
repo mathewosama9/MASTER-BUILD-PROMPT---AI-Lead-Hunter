@@ -199,6 +199,8 @@ async def list_providers(db: AsyncSession, workspace_id: uuid.UUID | None, *, pu
     usage = {} if public else await monthly_usage(db, workspace_id)
     out: list[dict] = []
     infos: list[ProviderInfo] = [p.info for p in discovery_providers()] + list(INTEGRATIONS.values())
+    if not get_settings().demo_mode:  # the demo source only exists while demo mode is on
+        infos = [i for i in infos if i.key != "demo"]
     for info in infos:
         state = await provider_state(db, workspace_id, info.key)
         cfg = await get_config(db, workspace_id, info.key)

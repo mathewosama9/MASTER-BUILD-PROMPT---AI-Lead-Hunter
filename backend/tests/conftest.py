@@ -118,6 +118,15 @@ def outbox(monkeypatch):
     return sent
 
 
+async def approve_signup(email: str) -> None:
+    """Mark a self-signup approved by the platform admin (the review itself is tested in test_signup_review.py)."""
+    from sqlalchemy import update
+
+    async with get_sessionmaker()() as session:
+        await session.execute(update(User).where(User.email == email.lower()).values(approval_status="approved"))
+        await session.commit()
+
+
 def link_token(mail: dict) -> str:
     """The token from the link in a captured email."""
     from urllib.parse import parse_qs, urlparse
@@ -167,6 +176,20 @@ async def client(app, owner):
     c = await login(app, owner[0].email)
     yield c
     await c.aclose()
+
+
+async def deliver_all() -> int:
+    """Drain the notification outbox (what the notify worker does every few seconds)."""
+    from app.services.notify.delivery import deliver_due
+
+    done = 0
+    for _ in range(100):
+        async with get_sessionmaker()() as s:
+            n = sum((await deliver_due(s)).values())
+        if not n:
+            break
+        done += n
+    return done
 
 
 async def run_latest(campaign_id: str) -> str:

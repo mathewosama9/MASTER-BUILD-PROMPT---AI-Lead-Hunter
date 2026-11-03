@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Send } from "lucide-react";
+import { CheckCircle2, Send } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -26,6 +26,8 @@ import {
   Th,
 } from "@/components/ui/primitives";
 import { ErrorState, LoadingState } from "@/components/ui/states";
+import { NotificationPrefsTab } from "@/features/notifications/preferences";
+import { type LinkCode, useWatchTelegramLink } from "@/features/settings/telegram-strip";
 import { useMe } from "@/hooks/queries";
 import { useI18n } from "@/i18n/provider";
 import { api } from "@/lib/api";
@@ -135,13 +137,14 @@ function UsersTab({ canEdit }: { canEdit: boolean }) {
   );
 }
 
-type LinkCode = { code: string; expires_at: string; bot_username: string | null; deep_link: string | null };
-
 function TelegramTab({ isAdmin }: { isAdmin: boolean }) {
   const { t, locale, label } = useI18n();
   const qc = useQueryClient();
   const accounts = useQuery({ queryKey: ["tg-accounts"], queryFn: () => api<{ id: string; user_email: string; telegram_user_id: number; username: string | null; status: string; created_at: string }[]>("/telegram/accounts") });
+  const { data: me } = useMe();
   const [code, setCode] = useState<LinkCode | null>(null);
+  useWatchTelegramLink(code && me?.telegram_status !== "linked" ? Date.parse(code.expires_at) : null);
+  const linked = me?.telegram_status === "linked";
   const gen = useMutation({
     mutationFn: () => api<LinkCode>("/telegram/link-code", { method: "POST" }),
     onSuccess: setCode,
@@ -149,29 +152,47 @@ function TelegramTab({ isAdmin }: { isAdmin: boolean }) {
   });
   const act = useMutation({
     mutationFn: ({ id, action }: { id: string; action: string }) => api(`/telegram/accounts/${id}/${action}`, { method: "POST" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tg-accounts"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tg-accounts"] });
+      qc.invalidateQueries({ queryKey: ["me"] });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
   return (
     <div className="space-y-4">
-      <Card>
-        <CardContent className="space-y-3 p-6">
-          <p className="text-sm">{t.settings.telegramIntro}</p>
-          <Button onClick={() => gen.mutate()} disabled={gen.isPending}><Send /> {t.settings.linkCode}</Button>
-          {code ? (
-            <div className="space-y-2 rounded-md border border-sun-500/40 bg-sun-500/10 p-4">
-              {code.deep_link ? (
-                <Button asChild>
-                  <a href={code.deep_link} target="_blank" rel="noopener noreferrer"><Send /> {t.settings.openBot}</a>
-                </Button>
-              ) : null}
-              <p className="text-xs text-muted-foreground">{code.deep_link ? t.settings.openBotHint : t.settings.linkInstructions}{code.bot_username ? ` @${code.bot_username}` : ""}</p>
-              <p className="mt-2 font-mono text-lg font-semibold tracking-widest" dir="ltr">/link {code.code}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t.common.expires}: {formatDate(code.expires_at, locale)}</p>
+      {linked ? (
+        <Card className="border-emerald-500/40 bg-emerald-500/5">
+          <CardContent className="flex items-start gap-3 p-6">
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+            <div>
+              <p className="font-medium">
+                {t.settings.tgLinkedTitle}
+                {me?.telegram_username ? <span className="ms-2 text-muted-foreground" dir="ltr">@{me.telegram_username}</span> : null}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">{t.settings.tgLinkedHint}</p>
             </div>
-          ) : null}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="space-y-3 p-6">
+            <p className="text-sm">{t.settings.telegramIntro}</p>
+            <Button onClick={() => gen.mutate()} disabled={gen.isPending}><Send /> {t.settings.linkCode}</Button>
+            {code ? (
+              <div className="space-y-2 rounded-md border border-sun-500/40 bg-sun-500/10 p-4">
+                {code.deep_link ? (
+                  <Button asChild>
+                    <a href={code.deep_link} target="_blank" rel="noopener noreferrer"><Send /> {t.settings.openBot}</a>
+                  </Button>
+                ) : null}
+                <p className="text-xs text-muted-foreground">{code.deep_link ? t.settings.openBotHint : t.settings.linkInstructions}{code.bot_username ? ` @${code.bot_username}` : ""}</p>
+                <p className="mt-2 font-mono text-lg font-semibold tracking-widest" dir="ltr">/link {code.code}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{t.common.expires}: {formatDate(code.expires_at, locale)}</p>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <Table>
           <thead className="border-b"><tr><Th>{t.settings.user}</Th><Th>{t.settings.telegram}</Th><Th>{t.settings.status}</Th><Th>{t.settings.linked}</Th><Th /></tr></thead>
@@ -237,12 +258,14 @@ export function SettingsPage() {
           <TabsTrigger value="business">{t.business.tab}</TabsTrigger>
           <TabsTrigger value="workspace">{t.settings.workspace}</TabsTrigger>
           <TabsTrigger value="users">{t.settings.users}</TabsTrigger>
+          <TabsTrigger value="notifications">{t.notify.pageTitle}</TabsTrigger>
           <TabsTrigger value="telegram">{t.settings.telegram}</TabsTrigger>
           {isAdmin ? <TabsTrigger value="audit">{t.settings.audit}</TabsTrigger> : null}
         </TabsList>
         <TabsContent value="business"><BusinessProfileTab canEdit={isAdmin} /></TabsContent>
         <TabsContent value="workspace"><WorkspaceSettings canEdit={isAdmin} /></TabsContent>
         <TabsContent value="users"><UsersTab canEdit={isAdmin} /></TabsContent>
+        <TabsContent value="notifications"><NotificationPrefsTab onLinkTelegram={() => setTab("telegram")} /></TabsContent>
         <TabsContent value="telegram"><TelegramTab isAdmin={isAdmin} /></TabsContent>
         {isAdmin ? <TabsContent value="audit"><AuditTab /></TabsContent> : null}
       </Tabs>

@@ -18,7 +18,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN uv pip install --system "playwright>=1.48" && playwright install --with-deps chromium     && chmod -R a+rx /ms-playwright && rm -rf /var/lib/apt/lists/*
 USER app
 HEALTHCHECK NONE
-CMD ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "research,default", "-l", "info"]
+CMD ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "research,default,notify", "-l", "info"]
 
 # Login browser: headed Chromium on a TigerVNC display, streamed to the dashboard through noVNC (:6080).
 # Used only when the user links a social account from Settings; the API controls it on :7900.

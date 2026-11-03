@@ -78,6 +78,11 @@ function StatusCards() {
               <p className="mt-2 text-lg font-semibold">{t.account.awaitingTrial}</p>
               <p className="mt-1 text-xs text-muted-foreground">{t.account.awaitingTrialHint}</p>
             </>
+          ) : s.awaiting_approval ? (
+            <>
+              <p className="mt-2 text-lg font-semibold">{t.account.awaitingApproval}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t.account.awaitingApprovalHint}</p>
+            </>
           ) : s.on_trial ? (
             s.trial_expired ? (
               <p className="mt-2 text-lg font-semibold text-destructive">{t.billing.trialExpired}</p>

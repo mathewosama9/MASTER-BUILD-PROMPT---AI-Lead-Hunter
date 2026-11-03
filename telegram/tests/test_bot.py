@@ -18,6 +18,8 @@ LINKED = 1001
 PENDING = 2002
 ARABIC = 3003
 NEWBIE = 4004
+ADMIN = 5005
+SIGNUP_ID = "5e1f0000-0000-0000-0000-000000000001"
 LEAD_ID = "1ead0000-0000-0000-0000-000000000001"
 PKG_ID = "0ac0a6e0-0000-0000-0000-000000000001"
 RECEIPT = b"%PDF-1.4 receipt"
@@ -91,7 +93,9 @@ LEAD = {
 
 class Backend:
     def __init__(self) -> None:
-        self.linked = {LINKED, ARABIC}
+        self.linked = {LINKED, ARABIC, ADMIN}
+        self.reviews: list[tuple[str, str | None]] = []
+        self.signup_status = "pending"
         self.balance = 80
         self.providers = [{"key": "google_maps", "status": "connected"}, {"key": "osm", "status": "connected"},
                           {"key": "brave", "status": "requires_api_key"}, {"key": "demo", "status": "connected"}]
@@ -111,7 +115,8 @@ class Backend:
         if path == "/telegram/whoami":
             if uid and int(uid) in self.linked:
                 return httpx.Response(200, json={"user": "a@b.c", "name": "Mona Ali", "role": "owner",
-                                                 "demo_mode": False, "locale": "ar" if uid == str(ARABIC) else None})
+                                                 "demo_mode": False, "locale": "ar" if uid == str(ARABIC) else "en",
+                                                 "is_superuser": uid == str(ADMIN)})
             return httpx.Response(403, json={"error": {"message": "not linked"}})
         if path == "/telegram/status":
             status = "pending" if request.url.params["telegram_user_id"] == str(PENDING) else "unlinked"
@@ -168,7 +173,35 @@ class Backend:
         if path == "/billing/topups":
             self.topups.append(body)
             return httpx.Response(201, json={"id": "t1", "status": "pending"})
+        if path.startswith("/admin/") and uid != str(ADMIN):
+            return httpx.Response(403, json={"error": {"code": "forbidden", "message": "Platform admins only"}})
+        if path == "/admin/users/summary":
+            return httpx.Response(200, json={"total": 40, "pending": 1, "suspicious": 2, "suspicious_pending": 1,
+                                             "rejected": 3, "new_7d": 5})
+        if path == "/admin/users":
+            return httpx.Response(200, json={"items": [self.signup(full=False)], "total": 1, "page": 1,
+                                             "page_size": 6})
+        if path == f"/admin/users/{SIGNUP_ID}":
+            return httpx.Response(200, json=self.signup())
+        if path in (f"/admin/users/{SIGNUP_ID}/approve", f"/admin/users/{SIGNUP_ID}/reject"):
+            if self.signup_status != "pending":
+                return httpx.Response(409, json={"error": {"code": "already_reviewed", "message": "done"}})
+            approve = path.endswith("/approve")
+            self.reviews.append(("approve", None) if approve else ("reject", body["reason"]))
+            self.signup_status = "approved" if approve else "rejected"
+            return httpx.Response(200, json={**self.signup(), "review_note": None if approve else body["reason"]})
         return httpx.Response(404, json={"error": {"message": "nope"}})
+
+    def signup(self, full: bool = True) -> dict:
+        row = {"id": SIGNUP_ID, "email": "mona+2@gmail.com", "full_name": "Mona Adel", "phone": "+20 100 000 0000",
+               "nationality": "EG", "approval_status": self.signup_status, "is_superuser": False,
+               "email_verified_at": None, "created_at": "2026-11-02T10:00:00Z", "signup_ip": "41.33.10.20",
+               "matches": 1, "strong_matches": 1,
+               "workspace": {"name": "Cairo Smiles", "balance": 0, "billing_exempt": False}}
+        if full:
+            row["duplicates"] = [{"email": "mona@gmail.com", "kinds": ["device", "phone", "email"], "strong": True,
+                                  "approval_status": "approved"}]
+        return row
 
 
 _DP = None
@@ -224,20 +257,22 @@ async def run_wizard(dp, bot, user=LINKED):
 async def test_unlinked_user_gets_onboarding(env):
     dp, bot, session, _ = env
     await feed(dp, bot, msg(5555, "/start"))
-    assert "Link your account in 3 steps" in session.texts()[-1]
+    # Unlinked users get Arabic by default, even with an English Telegram app
+    assert "اربط حسابك في 3 خطوات" in session.texts()[-1]
 
 
 async def test_pending_user_sees_pending(env):
     dp, bot, session, _ = env
     await feed(dp, bot, msg(PENDING, "/start"))
-    assert "waiting" in session.texts()[-1]
+    assert "مستني موافقة" in session.texts()[-1]
 
 
 async def test_link_command_links_and_opens_menu(env):
     dp, bot, session, backend = env
     await feed(dp, bot, msg(NEWBIE, "/link good1234"))
     assert backend.links[-1]["code"] == "GOOD1234"
-    assert any("linked" in x for x in session.texts())
+    assert any("تم ربط حسابك" in x for x in session.texts())
+    # then the menu follows the language saved on the account (English here)
     assert any("New search" in b.text for b in buttons(session.last()))
 
 
@@ -251,7 +286,7 @@ async def test_deep_link_start_links_account(env):
 async def test_deep_link_with_bad_code_explains(env):
     dp, bot, session, _ = env
     await feed(dp, bot, msg(NEWBIE, "/start BADCODE1"))
-    assert "did not work" in session.texts()[-1]
+    assert "الكود ده مانفعش" in session.texts()[-1]
 
 
 async def test_start_shows_main_menu(env):
@@ -444,3 +479,50 @@ async def test_top_up_points_to_paypal_checkout(env):
     text = session.last().text
     assert "PayPal" in text and "receipt" not in text
     assert not backend.topups  # nothing is requested from the bot any more
+
+
+# Platform admin: signup review ------------------------------------------------------------------------
+
+async def test_admin_menu_only_for_platform_admins(env):
+    dp, bot, session, backend = env
+    await feed(dp, bot, msg(LINKED, "/start"))
+    assert not any(b.callback_data == "adm:home" for b in buttons(session.last()))
+    await feed(dp, bot, msg(ADMIN, "/start"))
+    assert any(b.callback_data == "adm:home" for b in buttons(session.last()))
+    await feed(dp, bot, cb(LINKED, f"adm:ok:{SIGNUP_ID}"), msg(LINKED, "/admin"))
+    assert backend.reviews == [] and "admins only" in session.alerts()[-1] and "admins only" in session.texts()[-1]
+
+
+async def test_admin_lists_pending_and_sees_duplicate_reasons(env):
+    dp, bot, session, _ = env
+    await feed(dp, bot, msg(ADMIN, "/admin"))
+    assert "Waiting for review: <b>1</b>" in session.texts()[-1]
+    await feed(dp, bot, cb(ADMIN, "adm:list:p:0"))
+    assert any(b.callback_data == f"adm:u:{SIGNUP_ID}" for b in buttons(session.last()))
+    await feed(dp, bot, cb(ADMIN, f"adm:u:{SIGNUP_ID}"))
+    card = session.texts()[-1]
+    assert "mona+2@gmail.com" in card and "🇪🇬 EG" in card and "Cairo Smiles" in card
+    assert "mona@gmail.com: same browser, same phone, same email (alias)" in card
+    assert {b.callback_data for b in buttons(session.last())} >= {f"adm:ok:{SIGNUP_ID}", f"adm:no:{SIGNUP_ID}"}
+
+
+async def test_admin_approves_from_notification_button(env):
+    dp, bot, session, backend = env
+    await feed(dp, bot, cb(ADMIN, f"adm:ok:{SIGNUP_ID}"))
+    assert backend.reviews == [("approve", None)]
+    assert "approved" in session.texts()[-1] and "Approved" in session.alerts()[-1]
+    await feed(dp, bot, cb(ADMIN, f"adm:ok:{SIGNUP_ID}"))  # second press: already reviewed, nothing sent twice
+    assert backend.reviews == [("approve", None)] and "already reviewed" in session.alerts()[-1]
+
+
+async def test_admin_rejects_with_preset_or_typed_reason(env):
+    dp, bot, session, backend = env
+    await feed(dp, bot, cb(ADMIN, f"adm:no:{SIGNUP_ID}"))
+    assert any(b.callback_data == f"adm:nr:{SIGNUP_ID}:dup" for b in buttons(session.last()))
+    await feed(dp, bot, cb(ADMIN, f"adm:nr:{SIGNUP_ID}:x"), msg(ADMIN, "no"), msg(ADMIN, "Used a fake company"))
+    assert backend.reviews == [("reject", "Used a fake company")]
+    assert "Rejected" in session.texts()[-1] and "Used a fake company" in session.texts()[-1]
+
+    backend.signup_status = "pending"
+    await feed(dp, bot, cb(ADMIN, f"adm:nr:{SIGNUP_ID}:dup"))
+    assert backend.reviews[-1] == ("reject", "Duplicate account / حساب مكرر")

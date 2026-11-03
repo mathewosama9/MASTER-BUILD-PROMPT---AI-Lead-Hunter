@@ -11,12 +11,16 @@ from sqlalchemy import text
 from app.api.v1 import (
     admin,
     admin_insights,
+    admin_notifications,
+    admin_ops,
+    admin_users,
     auth,
     billing,
     campaigns,
     dashboard,
     exports,
     leads,
+    notifications,
     profile,
     providers,
     public,
@@ -89,6 +93,10 @@ def create_app() -> FastAPI:
         billing.webhook_router,
         admin.router,
         admin_insights.router,
+        admin_notifications.router,
+        admin_users.router,
+        admin_ops.router,
+        notifications.router,
         reviews.router,
     ):
         api.include_router(r)

@@ -36,7 +36,7 @@ async def on_error(event: ErrorEvent) -> bool:
                 await cb.answer()
         return True
     user = (cb or msg).from_user if (cb or msg) else None
-    lang = user_lang(user.id, user.language_code) if user else "en"
+    lang = user_lang(user.id, user.language_code) if user else "ar"
     if isinstance(exc, ApiError):
         if exc.status >= 500:
             text = t("backend_down", lang)

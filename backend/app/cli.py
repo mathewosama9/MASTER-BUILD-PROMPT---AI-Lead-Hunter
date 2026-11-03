@@ -3,6 +3,7 @@
 python -m app.cli create-admin --email admin@example.com --password '...' --workspace "My Agency"
 python -m app.cli run-demo --email admin@example.com          # runs a full demo campaign inline
 python -m app.cli set-superuser --email you@example.com [--revoke]   # platform admin (/app/admin)
+python -m app.cli refresh-dup-counts                  # after migration 0018: fill the stored duplicate counts
 """
 
 import asyncio
@@ -110,6 +111,34 @@ async def _set_superuser(email: str, value: bool) -> None:
 @cli.command("set-superuser")
 def set_superuser(email: str = typer.Option(...), revoke: bool = typer.Option(False, "--revoke")) -> None:
     asyncio.run(_set_superuser(email, not revoke))
+
+
+async def _refresh_dup_counts(batch: int) -> None:
+    """Recompute every user's stored duplicate counts, a batch of users at a time (keyset on id), one short
+    transaction per batch. Safe to run while the app is live and to re-run."""
+    from app.models import AccountSignal
+    from app.services import signup_review as review
+
+    after: uuid.UUID | None = None
+    done = 0
+    while True:
+        async with worker_session() as db:
+            q = select(AccountSignal.user_id).distinct().order_by(AccountSignal.user_id).limit(batch)
+            if after is not None:
+                q = q.where(AccountSignal.user_id > after)
+            ids = (await db.scalars(q)).all()
+            if not ids:
+                break
+            for uid in ids:
+                await review.store_counts(db, uid, await review.matches(db, uid))
+            await db.commit()
+        after, done = ids[-1], done + len(ids)
+        typer.echo(f"{done} users checked")
+
+
+@cli.command("refresh-dup-counts")
+def refresh_dup_counts(batch: int = typer.Option(500)) -> None:
+    asyncio.run(_refresh_dup_counts(batch))
 
 
 if __name__ == "__main__":

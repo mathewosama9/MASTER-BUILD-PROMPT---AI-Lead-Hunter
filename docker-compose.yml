@@ -58,7 +58,7 @@ services:
     image: ai-lead-hunter-worker
     <<: *backend-env
     shm_size: "1gb"  # Chromium needs more than Docker's 64 MB default /dev/shm
-    command: ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "research,default", "--concurrency", "${WORKER_CONCURRENCY:-4}", "-l", "info"]
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "research,default,notify", "--concurrency", "${WORKER_CONCURRENCY:-4}", "-l", "info"]
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 5 | grep -q pong"]
       interval: 60s

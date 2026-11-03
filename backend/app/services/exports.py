@@ -162,9 +162,14 @@ async def export_rows(db: AsyncSession, workspace_id: uuid.UUID, f: LeadFilters)
 
 
 def to_csv(rows: list[list]) -> bytes:
+    return rows_to_csv(COLUMNS, rows)
+
+
+def rows_to_csv(header: list[str], rows: list[list]) -> bytes:
+    """UTF-8 with BOM so Excel shows Arabic correctly; every cell is formula-safe."""
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(COLUMNS)
+    writer.writerow(header)
     for r in rows:
         writer.writerow([_safe_cell(v) for v in r])
     return ("﻿" + buf.getvalue()).encode("utf-8")

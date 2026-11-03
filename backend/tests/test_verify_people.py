@@ -66,6 +66,19 @@ async def test_each_council_member_is_read_whatever_its_reply_shape():
     assert by["gemini"].citations == ["https://news.example/b"] and by["gemini"].people[0].role == "Founder"
 
 
+async def test_a_council_member_moves_to_its_next_key_when_one_is_used_up():
+    used: list[str] = []
+
+    def route(request: httpx.Request) -> httpx.Response:
+        key = request.headers["x-goog-api-key"]
+        used.append(key)
+        return httpx.Response(429, json={}) if key == "g-spent" else _gemini(request)
+
+    answers = await ask_council({"gemini": "g-spent\ng-fresh"}, {"name": "Smile"}, transport=httpx.MockTransport(route))
+    assert not answers[0].error and answers[0].people
+    assert "g-fresh" in used
+
+
 def test_unusable_replies_name_nobody():
     assert parse_people("I could not find who runs this business.") == []
     assert parse_people('{"people": []}') == []

@@ -3,23 +3,38 @@ import secrets
 import uuid
 from datetime import UTC, datetime
 
+import jwt
 from fastapi import APIRouter, BackgroundTasks, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import CSRF_COOKIE, DB, SESSION_COOKIE, CurrentPrincipal, audit, require_role
+from app.api.deps import (
+    ADMIN_SESSION_COOKIE,
+    CSRF_COOKIE,
+    CSRF_HEADER,
+    DB,
+    SESSION_COOKIE,
+    CurrentPrincipal,
+    audit,
+    require_role,
+)
+from app.api.v1.telegram import link_states
 from app.core.config import get_settings
-from app.core.errors import AppError, Conflict, NotFound, Unauthorized
+from app.core.errors import AppError, Conflict, Forbidden, NotFound, Unauthorized
 from app.core.ratelimit import enforce
 from app.core.security import (
+    ALGORITHM,
+    constant_time_equals,
     create_access_token,
+    decode_access_token,
     hash_password,
     new_csrf_token,
     password_fingerprint,
     verify_password,
 )
 from app.models import AuditLog, TelegramAccount, TelegramLinkCode, User, Workspace, WorkspaceMember
-from app.models.enums import Role, TelegramLinkStatus
+from app.models.enums import ApprovalStatus, Role, TelegramLinkStatus
 from app.schemas.auth import (
     ForgotPasswordIn,
     LoginIn,
@@ -35,41 +50,96 @@ from app.schemas.auth import (
 )
 from app.schemas.common import Message
 from app.services import accounts
+from app.services import signup_review as review
+from app.services.notify import notify
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 users_router = APIRouter(prefix="/users", tags=["users"])
 
 
-def _set_session(response: Response, token: str, csrf: str) -> None:
+def _set_session(response: Response, token: str, csrf: str, minutes: int | None = None) -> None:
     s = get_settings()
     common = {
         "secure": s.cookie_secure,
         "samesite": "lax",
         "domain": s.cookie_domain,
         "path": "/",
-        "max_age": s.access_token_minutes * 60,
+        "max_age": (minutes or s.access_token_minutes) * 60,
     }
     response.set_cookie(SESSION_COOKIE, token, httponly=True, **common)
     response.set_cookie(CSRF_COOKIE, csrf, httponly=False, **common)
 
 
 @router.post("/login", response_model=MeOut)
-async def login(body: LoginIn, request: Request, response: Response, db: DB) -> MeOut:
-    user = await db.scalar(select(User).where(func.lower(User.email) == body.email.lower(), User.deleted_at.is_(None)))
-    if user is None or not user.is_active or not verify_password(body.password, user.password_hash):
+async def login(
+    body: LoginIn, request: Request, response: Response, background: BackgroundTasks, db: DB
+) -> MeOut:
+    email = body.email.lower()
+    # Per address: password guessing against one account is slowed whatever IPs it comes from.
+    await enforce(f"login:{password_fingerprint(email)}", get_settings().login_limit_per_email, 900)
+    user = await db.scalar(select(User).where(func.lower(User.email) == email, User.deleted_at.is_(None)))
+    # Hash even for an unknown address, so the reply time does not reveal which emails have accounts.
+    password_ok = verify_password(body.password, user.password_hash if user else _DUMMY_HASH)
+    if user is None or not user.is_active or not password_ok:
         raise Unauthorized("Invalid email or password")
+    if user.approval_status == ApprovalStatus.REJECTED:
+        raise Forbidden("This account was not approved. Contact support.", code="account_rejected")
     member = await db.scalar(
         select(WorkspaceMember).where(WorkspaceMember.user_id == user.id).order_by(WorkspaceMember.created_at).limit(1)
     )
     if member is None:
         raise Unauthorized("User has no workspace")
-    return await _start_session(db, request, response, user, member, "auth.login")
+    return await _start_session(
+        db, request, response, user, member, "auth.login", body.device_fp, background=background
+    )
+
+
+_DUMMY_HASH = hash_password("timing-equaliser-not-a-real-password")
+
+
+def _device_id(request: Request, response: Response) -> str:
+    """The browser's long-lived id, set on first sign-in; a second account from the same browser shares it."""
+    device = request.cookies.get(review.DEVICE_COOKIE, "")
+    if not re.fullmatch(r"[a-f0-9]{32}", device):
+        device = review.new_device_id()
+    s = get_settings()
+    response.set_cookie(
+        review.DEVICE_COOKIE,
+        device,
+        max_age=review.DEVICE_COOKIE_DAYS * 86400,
+        httponly=True,
+        secure=s.cookie_secure,
+        samesite="lax",
+        domain=s.cookie_domain,
+        path="/",
+    )
+    return device
 
 
 async def _start_session(
-    db: DB, request: Request, response: Response, user: User, member: WorkspaceMember, action: str
+    db: DB,
+    request: Request,
+    response: Response,
+    user: User,
+    member: WorkspaceMember,
+    action: str,
+    fingerprint: str | None = None,
+    *,
+    with_identity: bool = False,
+    commit: bool = True,
+    background: BackgroundTasks | None = None,
 ) -> MeOut:
     user.last_login_at = datetime.now(UTC)
+    new_signal = await review.record(
+        db,
+        user,
+        ip=_ip(request),
+        device=_device_id(request, response),
+        fingerprint=fingerprint,
+        user_agent=request.headers.get("user-agent"),
+        with_identity=with_identity,
+    )
+    user.last_seen_at, user.last_seen_ip = user.last_login_at, review.public_ip(_ip(request))
     token = create_access_token(user.id, member.workspace_id, password_hash=user.password_hash)
     csrf = new_csrf_token()
     _set_session(response, token, csrf)
@@ -81,7 +151,10 @@ async def _start_session(
             ip=request.client.host if request.client else None,
         )
     )
-    await db.commit()
+    if commit:
+        await db.commit()
+    if new_signal and background is not None:  # after the commit, outside this transaction's row locks
+        background.add_task(review.refresh_counts_soon, user.id, new_signal)
     ws = await db.get(Workspace, member.workspace_id)
     return MeOut(
         user=UserOut.model_validate(user),
@@ -122,8 +195,9 @@ def _ip(request: Request) -> str:
 async def register(
     body: RegisterIn, request: Request, response: Response, background: BackgroundTasks, db: DB
 ) -> MeOut:
-    """Self-signup: a new workspace owned by the caller. The free trial (from the platform settings) starts when the
-    owner confirms their email, so one inbox gets one trial."""
+    """Self-signup: a new workspace owned by the caller. The free trial (from the platform settings) starts once the
+    owner has confirmed their email and the platform admin has approved the account (services/signup_review.py),
+    so one person gets one trial."""
     await enforce(f"signup:{_ip(request)}", get_settings().signup_limit_per_hour, 3600)
     email = body.email.lower()
     if await db.scalar(select(User.id).where(func.lower(User.email) == email)):
@@ -133,7 +207,10 @@ async def register(
         password_hash=hash_password(body.password),
         full_name=body.full_name,
         phone=body.phone,
+        nationality=body.nationality,
         locale=body.locale,
+        approval_status=ApprovalStatus.PENDING,
+        signup_ip=review.public_ip(_ip(request)),
     )
     workspace = Workspace(name=body.company, slug=_slug(body.company), settings={})
     db.add_all([user, workspace])
@@ -144,8 +221,17 @@ async def register(
         raise Conflict("An account with this email already exists; sign in instead", code="email_taken") from exc
     member = WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role=Role.OWNER)
     db.add(member)
-    me = await _start_session(db, request, response, user, member, "auth.registered")
+    me = await _start_session(
+        db, request, response, user, member, "auth.registered", body.device_fp, with_identity=True, commit=False
+    )
+    found = await review.matches(db, user.id)
+    if not await review.needs_review(db, found):
+        user.approval_status = ApprovalStatus.APPROVED
+        me.user.approval_status = ApprovalStatus.APPROVED
+    await review.notify_signup(db, user, body.company, found)
+    await db.commit()
     background.add_task(accounts.send_verification, user.id)
+    background.add_task(review.after_signup, user.id)  # stored counts, and signups made at the same moment
     return me
 
 
@@ -186,6 +272,7 @@ async def reset_password(body: ResetPasswordIn, request: Request, db: DB) -> Mes
     user.password_hash = hash_password(body.password)  # also signs out every existing session
     await _revoke_telegram(db, user.id)
     await accounts.mark_verified(db, user)  # the reset link proves the user reads this inbox
+    await notify(db, "password_changed", users=[user])
     db.add(AuditLog(user_id=user.id, action="auth.password_reset", ip=_ip(request), via="web"))
     await db.commit()
     return Message(message="Password updated; sign in with the new password")
@@ -218,12 +305,67 @@ async def resend_verification(p: CurrentPrincipal, background: BackgroundTasks) 
 async def logout(response: Response) -> Message:
     response.delete_cookie(SESSION_COOKIE, path="/")
     response.delete_cookie(CSRF_COOKIE, path="/")
+    response.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
     return Message(message="Logged out")
+
+
+@router.post("/impersonation/stop")
+async def stop_impersonation(request: Request, response: Response, db: DB) -> dict:
+    """Leave a customer's account and go back to the admin's own session (kept aside when viewing started).
+
+    It needs no valid customer session, so it still works after the 30-minute view has run out."""
+    if not constant_time_equals(request.headers.get(CSRF_HEADER), request.cookies.get(CSRF_COOKIE)):
+        raise Forbidden("CSRF token missing or invalid")
+    admin_token = request.cookies.get(ADMIN_SESSION_COOKIE) or ""
+    admin: User | None = None
+    try:
+        payload = decode_access_token(admin_token)
+        if "imp" not in payload:
+            admin = await db.get(User, uuid.UUID(payload["sub"]))
+    except (jwt.PyJWTError, KeyError, ValueError):
+        admin = None
+    if admin is not None and (not admin.is_superuser or not admin.is_active or admin.deleted_at is not None):
+        admin = None
+    # Who was being viewed: read from the customer session even if it expired, only to log it and go back to them.
+    viewed: User | None = None
+    viewed_ws: uuid.UUID | None = None
+    try:
+        current = jwt.decode(
+            request.cookies.get(SESSION_COOKIE) or "",
+            get_settings().secret_key,
+            algorithms=[ALGORITHM],
+            options={"verify_exp": False},
+        )
+        if admin is not None and current.get("imp") == str(admin.id):
+            viewed, viewed_ws = await db.get(User, uuid.UUID(current["sub"])), uuid.UUID(current["ws"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        viewed = None
+    response.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
+    if admin is None:  # nothing to go back to (the admin's own session ran out too): sign out completely
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(CSRF_COOKIE, path="/")
+        return {"user_id": None, "signed_out": True}
+    if viewed is not None:
+        db.add(
+            AuditLog(
+                workspace_id=viewed_ws,
+                user_id=admin.id,
+                action="admin.impersonation_stopped",
+                entity_type="user",
+                entity_id=str(viewed.id),
+                data={"email": viewed.email},
+                ip=request.client.host if request.client else None,
+            )
+        )
+        await db.commit()
+    _set_session(response, admin_token, request.cookies.get(CSRF_COOKIE) or new_csrf_token())
+    return {"user_id": str(viewed.id) if viewed else None, "signed_out": False}
 
 
 @router.get("/me", response_model=MeOut)
 async def me(p: CurrentPrincipal, request: Request, db: DB) -> MeOut:
     ws = await db.get(Workspace, p.workspace_id)
+    tg_status, tg_username = (await link_states(db, [p.user.id])).get(p.user.id, ("none", None))
     return MeOut(
         user=UserOut.model_validate(p.user),
         workspace_id=p.workspace_id,
@@ -231,6 +373,9 @@ async def me(p: CurrentPrincipal, request: Request, db: DB) -> MeOut:
         role=p.role,
         csrf_token=request.cookies.get(CSRF_COOKIE),
         demo_mode=get_settings().demo_mode,
+        telegram_status=tg_status,
+        telegram_username=tg_username,
+        impersonated_by=p.impersonator.email if p.impersonator else None,
     )
 
 
@@ -243,11 +388,25 @@ async def change_password(
     p.user.password_hash = hash_password(body.new_password)  # signs out other sessions
     await _revoke_telegram(db, p.user.id)
     await audit(db, p, "auth.password_changed", "user", p.user.id)
+    await notify(db, "password_changed", users=[p.user])
     await db.commit()
     if p.via == "web":  # keep this browser signed in
         token = create_access_token(p.user.id, p.workspace_id, password_hash=p.user.password_hash)
         _set_session(response, token, request.cookies.get(CSRF_COOKIE) or new_csrf_token())
     return Message(message="Password updated")
+
+
+class LocaleIn(BaseModel):
+    locale: str = Field(pattern="^(ar|en)$")
+
+
+@router.put("/locale", response_model=Message)
+async def set_locale(body: LocaleIn, p: CurrentPrincipal, db: DB) -> Message:
+    """The dashboard language, so emails and notifications follow it instead of the signup language."""
+    if p.user.locale != body.locale:
+        p.user.locale = body.locale
+        await db.commit()
+    return Message(message="ok")
 
 
 @users_router.get("", response_model=list[MemberOut])

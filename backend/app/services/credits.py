@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.models import BusinessContact, CreditTransaction, PlatformSettings, User, Workspace, WorkspaceMember
-from app.models.enums import ContactType, CreditKind, Role, VerificationStatus
+from app.models.enums import ApprovalStatus, ContactType, CreditKind, Role, VerificationStatus
 
 USABLE_CONTACT_TYPES = (ContactType.PHONE, ContactType.WHATSAPP, ContactType.EMAIL)
 LOW_BALANCE_CREDITS = 10  # below this the dashboard asks the client to top up
@@ -31,6 +31,15 @@ class EmailUnverified(AppError):
 
     def __init__(self) -> None:
         super().__init__("Confirm your email to activate your free trial credits", code="email_unverified")
+
+
+class AccountPending(AppError):
+    status_code = 403
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Your account is being reviewed; the free trial starts once it is approved", code="account_pending"
+        )
 
 
 class TrialExpired(AppError):
@@ -100,7 +109,14 @@ async def charge(
     """Spend `amount` credits; raises InsufficientCredits (and changes nothing) if the balance is too low."""
     if amount <= 0:
         raise ValueError("charge amount must be positive")
-    return await _apply(db, workspace_id, -amount, kind, **kw)  # type: ignore[arg-type]
+    tx = await _apply(db, workspace_id, -amount, kind, **kw)  # type: ignore[arg-type]
+    if 0 < tx.balance_after < LOW_BALANCE_CREDITS <= tx.balance_after + amount:  # just crossed the line: tell once
+        from app.services.notify import notify
+
+        await notify(
+            db, "credits_low", workspace_id=workspace_id, params={"balance": tx.balance_after}, link="/app/billing"
+        )
+    return tx
 
 
 async def adjust(db: AsyncSession, workspace_id: uuid.UUID, delta: int, **kw: object) -> CreditTransaction:
@@ -149,6 +165,29 @@ async def owner_verified(db: AsyncSession, workspace_id: uuid.UUID) -> bool:
     )
 
 
+async def owner_approved(db: AsyncSession, workspace_id: uuid.UUID) -> bool:
+    """Has the platform admin approved any owner of the workspace?"""
+    return bool(
+        await db.scalar(
+            select(
+                exists().where(
+                    WorkspaceMember.workspace_id == workspace_id,
+                    WorkspaceMember.role == Role.OWNER,
+                    WorkspaceMember.user_id == User.id,
+                    User.approval_status == ApprovalStatus.APPROVED,
+                )
+            )
+        )
+    )
+
+
+async def awaiting_approval(db: AsyncSession, workspace: Workspace) -> bool:
+    """A self-signup whose free trial waits for the platform admin's approval."""
+    return (
+        not workspace.billing_exempt and workspace.trial_ends_at is None and not await owner_approved(db, workspace.id)
+    )
+
+
 async def awaiting_verification(db: AsyncSession, workspace: Workspace) -> bool:
     """A self-signup whose free trial starts once an owner confirms their email."""
     return (
@@ -167,6 +206,8 @@ async def ensure_can_spend(db: AsyncSession, workspace: Workspace) -> None:
     if workspace.credit_balance <= 0:
         if await awaiting_verification(db, workspace):
             raise EmailUnverified()
+        if await awaiting_approval(db, workspace):
+            raise AccountPending()
         raise InsufficientCredits("You have no credits left; top up to run a campaign")
 
 

@@ -8,11 +8,14 @@ import {
   Coins,
   FlaskConical,
   Globe,
+  Hourglass,
   Languages,
   LayoutDashboard,
   LogOut,
   MessageSquareHeart,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Moon,
   Plus,
   Radar,
@@ -35,12 +38,45 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/states";
 import { VerifyEmailBanner } from "@/features/auth/account-forms";
 import { ReviewDialog } from "@/features/dashboard/review";
+import { ImpersonationStrip } from "@/features/admin/ops";
+import { NotificationBell } from "@/features/notifications/bell";
+import { TelegramStrip } from "@/features/settings/telegram-strip";
 import { useBillingSummary, useMe } from "@/hooks/queries";
-import { useI18n } from "@/i18n/provider";
+import { hasSavedLocale, useI18n } from "@/i18n/provider";
 import { api } from "@/lib/api";
 import { cn, formatNumber } from "@/lib/utils";
 
 const noopSubscribe = () => () => {};
+
+// The desktop sidebar can fold down to icons; the choice is remembered per browser.
+const SIDEBAR_KEY = "rasd-sidebar-collapsed";
+const SIDEBAR_EVENT = "rasd-sidebar";
+function subscribeSidebar(cb: () => void) {
+  window.addEventListener(SIDEBAR_EVENT, cb);
+  window.addEventListener("storage", cb);
+  return () => {
+    window.removeEventListener(SIDEBAR_EVENT, cb);
+    window.removeEventListener("storage", cb);
+  };
+}
+function readSidebar() {
+  try {
+    return window.localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function setSidebarCollapsed(v: boolean) {
+  try {
+    window.localStorage.setItem(SIDEBAR_KEY, v ? "1" : "0");
+  } catch {
+    // private mode: the toggle still works until the next page load
+  }
+  window.dispatchEvent(new Event(SIDEBAR_EVENT));
+}
+function useSidebarCollapsed() {
+  return useSyncExternalStore(subscribeSidebar, readSidebar, () => false);
+}
 
 // Daily work first (home, the leads to call, the searches); account pages below a divider.
 const NAV_PRIMARY = [
@@ -63,20 +99,20 @@ function isActive(pathname: string, href: string) {
   return href === "/app" ? pathname === "/app" : pathname.startsWith(href) && !(href === "/app/campaigns" && pathname === "/app/campaigns/new");
 }
 
-function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+function NavLinks({ onNavigate, collapsed = false }: { onNavigate?: () => void; collapsed?: boolean }) {
   const { t } = useI18n();
   const { data: me } = useMe();
   const secondary: readonly NavItem[] = me?.user.is_superuser ? [...NAV_SECONDARY, ADMIN_NAV] : NAV_SECONDARY;
   return (
     <nav className="flex flex-col gap-0.5" aria-label={t.common.mainNav}>
-      <NavGroup items={NAV_PRIMARY} onNavigate={onNavigate} />
-      <div className="mx-3 my-3 h-px bg-white/10" aria-hidden />
-      <NavGroup items={secondary} onNavigate={onNavigate} />
+      <NavGroup items={NAV_PRIMARY} onNavigate={onNavigate} collapsed={collapsed} />
+      <div className={cn("my-3 h-px bg-white/10", collapsed ? "mx-1" : "mx-3")} aria-hidden />
+      <NavGroup items={secondary} onNavigate={onNavigate} collapsed={collapsed} />
     </nav>
   );
 }
 
-function NavGroup({ items, onNavigate }: { items: readonly NavItem[]; onNavigate?: () => void }) {
+function NavGroup({ items, onNavigate, collapsed = false }: { items: readonly NavItem[]; onNavigate?: () => void; collapsed?: boolean }) {
   const pathname = usePathname();
   const { t } = useI18n();
   return (
@@ -89,14 +125,19 @@ function NavGroup({ items, onNavigate }: { items: readonly NavItem[]; onNavigate
             href={href}
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
+            aria-label={collapsed ? t.nav[key] : undefined}
+            title={collapsed ? t.nav[key] : undefined}
             className={cn(
-              "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-sidebar-muted transition-colors hover:bg-white/5 hover:text-sidebar-foreground",
+              "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-sidebar-muted transition-colors hover:bg-white/5 hover:text-sidebar-foreground",
+              collapsed && "justify-center px-0",
               active && "bg-white/[0.08] font-medium text-sidebar-foreground",
             )}
           >
-            <Icon className={cn("size-4", active ? "text-signal-400" : "text-sidebar-muted group-hover:text-rasd-300")} />
-            {t.nav[key]}
-            {active ? <span aria-hidden className="ms-auto size-1.5 rounded-full bg-signal-400" /> : null}
+            <Icon className={cn("size-4 shrink-0", active ? "text-signal-400" : "text-sidebar-muted group-hover:text-rasd-300")} />
+            {collapsed ? null : t.nav[key]}
+            {active ? (
+              <span aria-hidden className={cn("size-1.5 rounded-full bg-signal-400", collapsed ? "absolute end-1 top-1" : "ms-auto")} />
+            ) : null}
           </Link>
         );
       })}
@@ -141,9 +182,27 @@ function BottomNav({ onMore }: { onMore: () => void }) {
 }
 
 /** Balance at a glance in the sidebar, with the trial countdown and a top-up shortcut. */
-function CreditCard({ onNavigate }: { onNavigate?: () => void }) {
+function CreditCard({ onNavigate, collapsed = false }: { onNavigate?: () => void; collapsed?: boolean }) {
   const { t, locale } = useI18n();
   const { data: s } = useBillingSummary();
+  if (collapsed) {
+    if (!s || s.billing_exempt) return null;
+    const warn = s.low_balance || s.trial_expired;
+    return (
+      <Link
+        href="/app/billing"
+        onClick={onNavigate}
+        title={`${t.common.creditsLeft}: ${formatNumber(s.balance, locale)}`}
+        className={cn(
+          "flex flex-col items-center gap-0.5 rounded-lg border px-1 py-2 text-[11px] tabular-nums",
+          warn ? "border-sun-500/40 bg-sun-500/10 text-sun-400" : "border-white/10 bg-white/5 text-sidebar-foreground",
+        )}
+      >
+        {warn ? <AlertTriangle className="size-3.5" aria-hidden /> : <Coins className="size-3.5" aria-hidden />}
+        {formatNumber(s.balance, locale)}
+      </Link>
+    );
+  }
   if (!s) return <div className="h-28" />;
   if (s.billing_exempt) {
     return <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-sidebar-muted">{t.common.unlimited}</div>;
@@ -168,23 +227,38 @@ function CreditCard({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+function Sidebar({ onNavigate, collapsed = false, onToggle }: { onNavigate?: () => void; collapsed?: boolean; onToggle?: () => void }) {
   const { t, locale } = useI18n();
+  const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
   return (
-    <div className="flex h-full flex-col gap-6 overflow-y-auto bg-sidebar p-4 text-sidebar-foreground">
-      <Link href="/app" className="px-1 pt-1" onClick={onNavigate} aria-label={t.appName}>
-        <Lockup locale={locale} markClassName="size-9" />
-      </Link>
-      <Button asChild variant="accent" className="justify-start">
-        <Link href="/app/campaigns/new" onClick={onNavigate}>
-          <Plus /> {t.nav.newCampaign}
+    <div className={cn("flex h-full flex-col gap-6 overflow-y-auto overflow-x-hidden bg-sidebar text-sidebar-foreground", collapsed ? "px-2 py-4" : "p-4")}>
+      <div className={cn("flex items-center gap-2", collapsed ? "flex-col" : "justify-between")}>
+        <Link href="/app" className={cn("pt-1", !collapsed && "px-1")} onClick={onNavigate} aria-label={t.appName}>
+          {collapsed ? <LogoMark className="size-9" /> : <Lockup locale={locale} markClassName="size-9" />}
+        </Link>
+        {onToggle ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label={collapsed ? t.common.expandSidebar : t.common.collapseSidebar}
+            aria-expanded={!collapsed}
+            title={collapsed ? t.common.expandSidebar : t.common.collapseSidebar}
+            className="rounded-md p-1.5 text-sidebar-muted transition-colors hover:bg-white/5 hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-400"
+          >
+            <ToggleIcon className="size-4 rtl:rotate-180" aria-hidden />
+          </button>
+        ) : null}
+      </div>
+      <Button asChild variant="accent" className={collapsed ? "justify-center px-0" : "justify-start"}>
+        <Link href="/app/campaigns/new" onClick={onNavigate} aria-label={collapsed ? t.nav.newCampaign : undefined} title={collapsed ? t.nav.newCampaign : undefined}>
+          <Plus /> {collapsed ? null : t.nav.newCampaign}
         </Link>
       </Button>
       <Suspense fallback={<div className="h-48" />}>
-        <NavLinks onNavigate={onNavigate} />
+        <NavLinks onNavigate={onNavigate} collapsed={collapsed} />
       </Suspense>
       <div className="mt-auto">
-        <CreditCard onNavigate={onNavigate} />
+        <CreditCard onNavigate={onNavigate} collapsed={collapsed} />
       </div>
     </div>
   );
@@ -198,7 +272,9 @@ function CreditBadge() {
   const warn = s.low_balance || s.trial_expired;
   const text = s.awaiting_verification
     ? t.account.badgeConfirm
-    : s.trial_expired
+    : s.awaiting_approval
+      ? t.account.badgePending
+      : s.trial_expired
       ? t.billing.badgeTrialEnded
       : t.billing.badge.replace("{n}", formatNumber(s.balance, locale));
   return (
@@ -306,6 +382,7 @@ function TopBar() {
       <div className="min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground">{me?.workspace_name}</div>
       <CreditBadge />
       {me?.demo_mode ? <DemoBadge /> : null}
+      <NotificationBell />
       <UserMenu />
     </header>
   );
@@ -314,6 +391,19 @@ function TopBar() {
 function EmailStrip({ email }: { email: string }) {
   const { data: s } = useBillingSummary();
   return <VerifyEmailBanner email={email} trialPending={!!s?.awaiting_verification} />;
+}
+
+/** A new self-signup waits for the platform admin's approval before its free trial starts. */
+function ReviewStrip() {
+  const { t } = useI18n();
+  const { data: s } = useBillingSummary();
+  if (!s?.awaiting_approval) return null;
+  return (
+    <div role="status" className="flex items-center gap-2 border-b border-sun-500/30 bg-sun-500/10 px-4 py-2 text-xs text-foreground md:px-6">
+      <Hourglass className="size-4 shrink-0 text-sun-500" aria-hidden />
+      {t.account.pendingBanner}
+    </div>
+  );
 }
 
 /** Mobile navigation drawer with focus trap and Escape-to-close (Radix Dialog). */
@@ -341,12 +431,29 @@ function MobileNav({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { data: me, isLoading, isError } = useMe();
   const [open, setOpen] = useState(false);
+  const collapsed = useSidebarCollapsed();
   const router = useRouter();
-  const { t } = useI18n();
+  const qc = useQueryClient();
+  const { t, locale, setLocale } = useI18n();
 
   useEffect(() => {
     if (isError) router.replace("/login");
   }, [isError, router]);
+
+  // Emails and Telegram follow the dashboard language. A browser that never picked one takes the account's language;
+  // one the user switched tells the server, so the next email matches what they read here.
+  // Not while an admin views the account: that session is read-only, and the language is the customer's.
+  const savedLocale = me?.impersonated_by ? undefined : me?.user.locale;
+  useEffect(() => {
+    if (!savedLocale || savedLocale === locale) return;
+    if (!hasSavedLocale()) {
+      if (savedLocale === "ar" || savedLocale === "en") setLocale(savedLocale);
+      return;
+    }
+    void api("/auth/locale", { method: "PUT", body: { locale } })
+      .then(() => qc.invalidateQueries({ queryKey: ["me"] }))
+      .catch(() => undefined);
+  }, [savedLocale, locale, qc, setLocale]);
 
   if (isLoading || !me) {
     return (
@@ -358,12 +465,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen">
-      <aside className="fixed inset-y-0 start-0 z-40 hidden w-64 md:block">
-        <Sidebar />
+      <aside className={cn("fixed inset-y-0 start-0 z-40 hidden transition-[width] duration-200 md:block", collapsed ? "w-16" : "w-64")}>
+        <Sidebar collapsed={collapsed} onToggle={() => setSidebarCollapsed(!collapsed)} />
       </aside>
       <MobileNav open={open} onOpenChange={setOpen} />
       <BottomNav onMore={() => setOpen(true)} />
-      <div className="flex min-w-0 flex-1 flex-col md:ms-64">
+      <div className={cn("flex min-w-0 flex-1 flex-col transition-[margin] duration-200", collapsed ? "md:ms-16" : "md:ms-64")}>
         <TopBar />
         {me.demo_mode ? (
           <div className="flex items-center gap-2 border-b border-sun-500/30 bg-sun-500/10 px-4 py-2 text-xs text-foreground md:px-6">
@@ -371,7 +478,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {t.common.demoBanner}
           </div>
         ) : null}
-        {me.user.email_verified_at === null ? <EmailStrip email={me.user.email} /> : null}
+        {me.impersonated_by ? <ImpersonationStrip email={me.user.email} /> : null}
+        {/* Both strips act (POST), which an admin viewing the account cannot do. */}
+        {me.user.email_verified_at === null && !me.impersonated_by ? <EmailStrip email={me.user.email} /> : null}
+        {/* Viewers cannot create link codes; everyone else sees this until Telegram is linked. */}
+        {me.telegram_status && me.telegram_status !== "linked" && me.role !== "viewer" && !me.impersonated_by ? (
+          <TelegramStrip status={me.telegram_status} />
+        ) : null}
+        {me.user.approval_status === "pending" ? <ReviewStrip /> : null}
         <main className="mx-auto w-full max-w-[1400px] flex-1 p-4 pb-28 md:p-6">{children}</main>
       </div>
     </div>

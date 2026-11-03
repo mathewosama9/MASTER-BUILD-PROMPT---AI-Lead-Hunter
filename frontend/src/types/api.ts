@@ -8,6 +8,8 @@ export interface Me {
     is_active: boolean;
     is_superuser?: boolean;
     email_verified_at?: string | null;
+    nationality?: string | null;
+    approval_status?: "pending" | "approved" | "rejected";
     locale: string;
   };
   workspace_id: string;
@@ -15,6 +17,9 @@ export interface Me {
   role: Role;
   csrf_token: string | null;
   demo_mode: boolean;
+  telegram_status?: "linked" | "pending" | "none";
+  telegram_username?: string | null;
+  impersonated_by?: string | null;
 }
 
 export interface Page<T> {
@@ -353,6 +358,7 @@ export interface BillingSummary {
   trial_days_left: number | null;
   trial_expired: boolean;
   awaiting_verification?: boolean;
+  awaiting_approval?: boolean;
   credits_per_contact: number;
   low_balance: boolean;
   pending_topups: number;
@@ -412,4 +418,33 @@ export interface PublicTestimonial {
   body_ar: string;
   body_en: string;
   is_featured: boolean;
+}
+
+export type NotifyChannel = "in_app" | "email" | "telegram";
+
+export interface NotificationItem {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  link: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationPage {
+  items: NotificationItem[];
+  total: number;
+  unread: number;
+}
+
+export interface NotificationPrefs {
+  kinds: {
+    key: string;
+    category: string;
+    locked: boolean;
+    channels: Record<NotifyChannel, { allowed: boolean; on: boolean }>;
+  }[];
+  telegram_linked: boolean;
+  email_verified: boolean;
 }

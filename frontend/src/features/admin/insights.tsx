@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Banknote, CheckCircle2, Coins, Inbox, MessageSquareQuote, UserPlus, Users, Wallet } from "lucide-react";
+import { AlertTriangle, Banknote, CheckCircle2, Coins, Inbox, MessageSquareQuote, UserCheck, UserPlus, Users, Wallet } from "lucide-react";
 
 import { TrendChart } from "@/components/charts";
 import { Card, CardContent, CardHeader, CardTitle, Table, Td, Th } from "@/components/ui/primitives";
@@ -19,7 +19,7 @@ interface AdminOverview {
   workspaces: { total: number; active_30d: number };
   revenue: { last_30d: Money[]; total: Money[]; monthly: (Money & { month: string })[] };
   credits_used_30d: number;
-  attention: { pending_topups: number; new_contacts: number; pending_reviews: number; sample_reviews: number };
+  attention: { pending_topups: number; pending_signups?: number; stuck_campaigns?: number; failed_campaigns_7d?: number; new_contacts: number; pending_reviews: number; sample_reviews: number };
   funnel: { signed_up: number; verified: number; first_search: number; paid: number };
   daily: { date: string; signups: number; credits_used: number }[];
 }
@@ -34,7 +34,21 @@ interface UsageRow {
   currency: string | null;
 }
 
-export type AdminTab = "overview" | "topups" | "workspaces" | "packages" | "contacts" | "testimonials" | "providers" | "usage" | "payments" | "settings";
+export type AdminTab =
+  | "overview"
+  | "users"
+  | "topups"
+  | "jobs"
+  | "workspaces"
+  | "packages"
+  | "contacts"
+  | "testimonials"
+  | "providers"
+  | "usage"
+  | "payments"
+  | "notifications"
+  | "activity"
+  | "settings";
 
 function money(list: Money[], locale: string) {
   return list.length ? list.map((m) => `${formatNumber(m.amount, locale)} ${m.currency}`).join(" + ") : "0";
@@ -78,6 +92,9 @@ export function AdminOverviewTab({ go }: { go: (tab: AdminTab) => void }) {
   const d = q.data;
   const n = (v: number) => formatNumber(v, locale);
   const attention = [
+    { n: d.attention.pending_signups ?? 0, text: o.pendingSignups, tab: "users" as const, icon: UserCheck },
+    { n: d.attention.stuck_campaigns ?? 0, text: o.stuckCampaigns, tab: "jobs" as const, icon: AlertTriangle },
+    { n: d.attention.failed_campaigns_7d ?? 0, text: o.failedCampaigns, tab: "jobs" as const, icon: AlertTriangle },
     { n: d.attention.pending_topups, text: o.pendingTopups, tab: "topups" as const, icon: Wallet },
     { n: d.attention.new_contacts, text: o.newContacts, tab: "contacts" as const, icon: Inbox },
     { n: d.attention.pending_reviews, text: o.pendingReviews, tab: "testimonials" as const, icon: MessageSquareQuote },

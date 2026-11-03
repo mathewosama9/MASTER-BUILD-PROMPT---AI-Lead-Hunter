@@ -11,7 +11,7 @@ from app.core.redis import async_redis
 from app.models import CreditTransaction, User, Workspace
 from app.models.enums import CreditKind
 from app.services import credits as credit_svc
-from tests.conftest import link_token
+from tests.conftest import approve_signup, link_token
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +41,7 @@ def signup(**over) -> dict:
         "email": f"sara-{uuid.uuid4().hex[:8]}@example.com",
         "phone": "+20 100 123 4567",
         "password": "a-long-enough-password",
+        "nationality": "EG",
         **over,
     }
 
@@ -74,7 +75,10 @@ async def test_signup_creates_owner_workspace_with_trial(anon, db, outbox):
     r = await anon.post("/api/v1/campaigns", json=campaign)
     assert r.status_code == 403 and r.json()["error"]["code"] == "email_unverified"
 
-    # The confirmation email (in the user's language) carries the link that starts the trial.
+    # The signup waits for the platform admin; once approved, the confirmation email (in the user's language)
+    # carries the link that starts the trial.
+    assert me["user"]["approval_status"] == "pending" and me["user"]["nationality"] == "EG"
+    await approve_signup(body["email"])
     [mail] = [m for m in outbox if m["to"] == body["email"]]
     assert "أكّد" in mail["subject"] and "/verify-email?token=" in mail["text"]
     assert (await anon.post("/api/v1/auth/email/verify", json={"token": link_token(mail)})).status_code == 200
@@ -97,8 +101,10 @@ async def test_signup_uses_the_admin_trial_settings(anon, db, outbox):
     s.trial_days, s.trial_credits = 7, 25
     await db.commit()
     try:
-        r = await anon.post("/api/v1/auth/register", json=signup())
+        body = signup()
+        r = await anon.post("/api/v1/auth/register", json=body)
         assert r.status_code == 201, r.text
+        await approve_signup(body["email"])
         await anon.post("/api/v1/auth/email/verify", json={"token": link_token(outbox[-1])})
         ws = await db.get(Workspace, uuid.UUID(r.json()["workspace_id"]))
         await db.refresh(ws)
@@ -123,6 +129,8 @@ async def test_signup_rejects_taken_email_any_case(anon, owner):
         {"email": "not-an-email"},
         {"company": " "},
         {"locale": "fr"},
+        {"nationality": "XX"},
+        {"nationality": ""},
     ],
 )
 async def test_signup_validates_input(anon, bad):

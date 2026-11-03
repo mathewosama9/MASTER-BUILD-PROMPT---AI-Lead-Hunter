@@ -13,6 +13,7 @@ import { Field, Input } from "@/components/ui/primitives";
 import { Spinner } from "@/components/ui/states";
 import { useI18n } from "@/i18n/provider";
 import { api, ApiError } from "@/lib/api";
+import { deviceFingerprint } from "@/lib/device";
 import { safeNextPath } from "@/lib/utils";
 
 import { AuthFrame } from "./auth-frame";
@@ -33,12 +34,14 @@ export function LoginForm() {
   async function onSubmit(values: LoginValues) {
     setError(null);
     try {
-      await api("/auth/login", { method: "POST", body: values });
+      await api("/auth/login", { method: "POST", body: { ...values, device_fp: await deviceFingerprint() } });
       await qc.invalidateQueries({ queryKey: ["me"] });
       const next = new URLSearchParams(window.location.search).get("next");
       router.replace(safeNextPath(next, window.location.origin, "/app"));
     } catch (e) {
-      setError(e instanceof ApiError && e.status === 401 ? t.auth.invalid : String((e as Error).message));
+      if (e instanceof ApiError && e.status === 401) setError(t.auth.invalid);
+      else if (e instanceof ApiError && e.code === "account_rejected") setError(t.auth.rejected);
+      else setError(String((e as Error).message));
     }
   }
 

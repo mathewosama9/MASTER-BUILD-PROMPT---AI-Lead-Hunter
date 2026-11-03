@@ -20,7 +20,7 @@ async def show_menu(event: Message | CallbackQuery, lang: str, me: dict | None, 
     text = t("welcome", lang, name=escape(name.split()[0] if name else "")) + "\n\n" + t("welcome_tip", lang)
     if me and me.get("demo_mode"):
         text += "\n\n" + t("demo_banner", lang)
-    await show(event, text, main_menu(lang), edit=edit)
+    await show(event, text, main_menu(lang, admin=bool((me or {}).get("is_superuser"))), edit=edit)
 
 
 async def _link(message: Message, code: str, lang: str, api: BackendClient) -> dict | None:
@@ -71,7 +71,7 @@ async def link_cmd(message: Message, command: CommandObject, lang: str, api: Bac
 @router.message(Command("cancel"))
 async def cancel_cmd(message: Message, state: FSMContext, lang: str, me: dict) -> None:
     await state.clear()
-    await message.answer(t("cancelled_wizard", lang), reply_markup=main_menu(lang))
+    await message.answer(t("cancelled_wizard", lang), reply_markup=main_menu(lang, admin=bool(me.get("is_superuser"))))
 
 
 @router.callback_query(F.data == "m:menu")

@@ -79,6 +79,13 @@ const SERVICES = [
       "research,default", "--pool", "solo", "--without-gossip", "--without-mingle", "-l", "info"], backend),
   },
   {
+    name: "notify",
+    up: () => alive(path.join(RUN, "notify.pid"), "celery"),
+    // Emails and Telegram messages: kept off the research worker, which can be busy with one long run.
+    start: () => launch("notify", venv("celery"), ["-A", "app.workers.celery_app", "worker", "-Q", "notify",
+      "--pool", "solo", "--without-gossip", "--without-mingle", "-n", "notify@%h", "-l", "info"], backend),
+  },
+  {
     name: "beat",
     up: () => alive(path.join(RUN, "beat.pid"), "celery"),
     start: () => launch("beat", venv("celery"), ["-A", "app.workers.celery_app", "beat", "-l", "info", "-s",

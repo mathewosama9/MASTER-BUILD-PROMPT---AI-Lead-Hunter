@@ -35,6 +35,8 @@ from app.schemas.marketing import TestimonialOut
 from app.services import credits as credit_svc
 from app.services import paypal, receipts
 from app.services import providers as provider_svc
+from app.services.notify import events as notify_events
+from app.services.notify import notify
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -48,6 +50,8 @@ class SettingsIO(BaseModel):
     credits_per_contact: int = Field(ge=1, le=100)
     payment_instructions_ar: str = Field(default="", max_length=4000)
     payment_instructions_en: str = Field(default="", max_length=4000)
+    # New self-signups wait for approval (off: only possible duplicate accounts wait).
+    signup_review: bool = True
     research_defaults: ResearchDefaults = Field(default_factory=ResearchDefaults)
 
     @field_validator("research_defaults", mode="before")
@@ -283,6 +287,7 @@ async def approve_topup(topup_id: uuid.UUID, p: SuperPrincipal, db: DB) -> Admin
         topup.id,
         {"credits": topup.credits, "workspace": str(topup.workspace_id)},
     )
+    await notify_events.payment_received(db, topup, manual=True)
     await db.commit()
     return (await _topup_rows(db, [TopUpRequest.id == topup.id]))[0]
 
@@ -299,6 +304,9 @@ async def reject_topup(topup_id: uuid.UUID, body: RejectIn, p: SuperPrincipal, d
     topup.reviewed_by = p.user.id
     topup.reviewed_at = datetime.now(UTC)
     await audit(db, p, "admin.topup_rejected", "topup", topup.id, {"reason": topup.reason})
+    await notify(
+        db, "topup_rejected", workspace_id=topup.workspace_id, params={"reason": topup.reason}, link="/app/billing"
+    )
     await db.commit()
     return (await _topup_rows(db, [TopUpRequest.id == topup.id]))[0]
 
@@ -409,6 +417,14 @@ async def adjust_credits(workspace_id: uuid.UUID, body: AdjustIn, p: SuperPrinci
     except credit_svc.InsufficientCredits as exc:
         raise Conflict("The balance cannot go below zero", code="insufficient_credits") from exc
     await audit(db, p, "admin.credits_adjusted", "workspace", workspace_id, {"delta": body.delta, "note": body.note})
+    if body.delta > 0:
+        await notify(
+            db,
+            "credits_added",
+            workspace_id=workspace_id,
+            params={"credits": body.delta, "balance": tx.balance_after},
+            link="/app/billing",
+        )
     await db.commit()
     return Message(message=f"Balance is now {tx.balance_after}")
 
@@ -429,6 +445,8 @@ async def update_workspace(workspace_id: uuid.UUID, body: WorkspacePatch, p: Sup
     if "suspended" in changes:
         if changes["suspended"] and workspace_id == p.workspace_id:
             raise Conflict("You cannot suspend your own workspace")
+        if changes["suspended"] and ws.suspended_at is None:
+            await notify(db, "account_suspended", workspace_id=workspace_id, min_role=Role.VIEWER)
         ws.suspended_at = datetime.now(UTC) if changes["suspended"] else None
     if "billing_exempt" in changes and changes["billing_exempt"] is not None:
         ws.billing_exempt = changes["billing_exempt"]

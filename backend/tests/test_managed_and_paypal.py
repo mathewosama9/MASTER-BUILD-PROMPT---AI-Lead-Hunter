@@ -181,3 +181,31 @@ async def test_checkout_unavailable_until_paypal_is_connected(buyer, usd_package
     assert (await c.get("/api/v1/billing/summary")).json()["paypal_enabled"] is False
     r = await c.post("/api/v1/billing/paypal/orders", json={"package_id": str(usd_package.id)})
     assert r.status_code == 503 and r.json()["error"]["code"] == "payments_unavailable"
+
+
+async def test_declined_payment_is_told_once_and_outages_are_not(buyer, db, usd_package, fake_paypal, monkeypatch):
+    from app.models import Notification
+
+    c, ws = buyer
+
+    async def failed_notes():
+        rows = await db.scalars(
+            select(Notification).where(Notification.workspace_id == ws.id, Notification.kind == "payment_failed")
+        )
+        return rows.all()
+
+    oid = (await c.post("/api/v1/billing/paypal/orders", json={"package_id": str(usd_package.id)})).json()["order_id"]
+    fake_paypal["next_order"] = {"id": oid, "purchase_units": [{"payments": {"captures": []}}]}
+    for _ in range(2):  # the return page retries: still one notification
+        r = await c.post("/api/v1/billing/paypal/capture", json={"order_id": oid})
+        assert r.json()["error"]["code"] == "paypal_not_completed"
+    [note] = await failed_notes()
+    assert note.params["order_id"] == oid
+
+    async def unreachable(creds, order_id):
+        raise paypal.PayPalError("Could not reach PayPal; please try again")
+
+    monkeypatch.setattr(paypal, "capture_order", unreachable)
+    other = (await c.post("/api/v1/billing/paypal/orders", json={"package_id": str(usd_package.id)})).json()["order_id"]
+    assert (await c.post("/api/v1/billing/paypal/capture", json={"order_id": other})).status_code == 502
+    assert len(await failed_notes()) == 1  # it may still complete through the webhook

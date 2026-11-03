@@ -1,15 +1,31 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, JSONType, SoftDelete, Timestamps, UUIDPk
-from app.models.enums import Role, TelegramLinkStatus
+from app.models.enums import ApprovalStatus, Role, TelegramLinkStatus
 
 
 class User(UUIDPk, Timestamps, SoftDelete, Base):
     __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_created_at", "created_at"),
+        Index("ix_users_email_lower", text("lower(email)")),  # sign-in looks users up by lower(email)
+        Index("ix_users_dup_matches", "dup_matches", postgresql_where=text("dup_matches > 0")),
+    )
 
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
@@ -21,8 +37,47 @@ class User(UUIDPk, Timestamps, SoftDelete, Base):
     last_login_at: Mapped[datetime | None]
     # Set when the user opens the confirmation link; self-signup trials start then.
     email_verified_at: Mapped[datetime | None]
+    # {kind: {"in_app": bool, "email": bool, "telegram": bool}}: the user's choices within the admin's policy
+    # (services/notify/catalog.py). Missing keys follow the policy defaults.
+    notification_prefs: Mapped[dict] = mapped_column(JSONType, default=dict)
+    nationality: Mapped[str | None] = mapped_column(String(2))  # ISO 3166-1 alpha-2
+    # Self-signups wait for a platform admin (services/signup_review.py); everyone else is approved.
+    approval_status: Mapped[str] = mapped_column(
+        String(16), default=ApprovalStatus.APPROVED, server_default=ApprovalStatus.APPROVED, index=True
+    )
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    reviewed_at: Mapped[datetime | None]
+    review_note: Mapped[str | None] = mapped_column(Text)
+    signup_ip: Mapped[str | None] = mapped_column(String(64))
+    # Any authenticated request, recorded at most every few minutes (services/presence.py).
+    last_seen_at: Mapped[datetime | None]
+    last_seen_ip: Mapped[str | None] = mapped_column(String(64))
+    admin_notes: Mapped[str | None] = mapped_column(Text)  # private to platform admins
+    # Other accounts sharing a trait with this one (all / strong evidence). Kept current by
+    # services/signup_review.refresh_counts so the admin list never self-joins the signals table.
+    dup_matches: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    dup_strong: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     memberships: Mapped[list["WorkspaceMember"]] = relationship(back_populates="user", lazy="selectin")
+
+
+class AccountSignal(UUIDPk, Timestamps, Base):
+    """One trait seen on a user's signup or sign-in (device, phone, IP...). Two users sharing a value are flagged
+    for the platform admin as possibly the same person."""
+
+    __tablename__ = "account_signals"
+    __table_args__ = (
+        UniqueConstraint("user_id", "kind", "value"),
+        Index("ix_account_signals_kind_value", "kind", "value"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    value: Mapped[str] = mapped_column(String(255))
+    last_seen_at: Mapped[datetime | None]
+    # Device rows: the browser and address it was last seen with (shown as the user's devices).
+    user_agent: Mapped[str | None] = mapped_column(String(400))
+    ip: Mapped[str | None] = mapped_column(String(64))
 
 
 class Workspace(UUIDPk, Timestamps, SoftDelete, Base):
@@ -98,7 +153,7 @@ class TelegramAccount(UUIDPk, Timestamps, Base):
     status: Mapped[str] = mapped_column(String(16), default=TelegramLinkStatus.PENDING)
     approved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     approved_at: Mapped[datetime | None]
-    locale: Mapped[str] = mapped_column(String(8), default="en")
+    locale: Mapped[str] = mapped_column(String(8), default="ar")
 
 
 class TelegramLinkCode(UUIDPk, Timestamps, Base):

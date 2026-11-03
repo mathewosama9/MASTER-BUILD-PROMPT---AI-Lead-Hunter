@@ -252,7 +252,63 @@ STRINGS: dict[str, dict[str, str]] = {
     "topup_admin_only": {"en": "Only workspace admins can request top-ups. Ask your admin.",
                          "ar": "مسؤول مساحة العمل بس اللي يقدر يطلب شحن. كلّمه."},
     "uploading": {"en": "⏳ Sending…", "ar": "⏳ جاري الإرسال…"},
+
+    # Platform admin: signup review -------------------------------------------------------------------
+    "btn_admin": {"en": "🛡 Admin: new accounts", "ar": "🛡 الأدمن: الحسابات الجديدة"},
+    "admin_only": {"en": "🔒 Platform admins only.", "ar": "🔒 للأدمن بس."},
+    "admin_home": {"en": "🛡 <b>New accounts</b>\n\n⏳ Waiting for review: <b>{pending}</b>\n"
+                         "⚠️ Possible duplicates: <b>{suspicious}</b> ({suspicious_pending} waiting)\n"
+                         "❌ Rejected: {rejected}\n👥 All users: {total} (+{new_7d} this week)",
+                   "ar": "🛡 <b>الحسابات الجديدة</b>\n\n⏳ مستنية مراجعة: <b>{pending}</b>\n"
+                         "⚠️ مشتبه إنها مكررة: <b>{suspicious}</b> ({suspicious_pending} مستنية)\n"
+                         "❌ مرفوضة: {rejected}\n👥 كل المستخدمين: {total} (+{new_7d} الأسبوع ده)"},
+    "btn_pending": {"en": "⏳ Waiting ({n})", "ar": "⏳ المستنية ({n})"},
+    "btn_suspects": {"en": "⚠️ Suspicious ({n})", "ar": "⚠️ المشتبه فيهم ({n})"},
+    "btn_admin_web": {"en": "🌐 Users dashboard", "ar": "🌐 لوحة المستخدمين"},
+    "list_pending": {"en": "⏳ <b>Waiting for review</b> ({total}). Pick an account:",
+                     "ar": "⏳ <b>مستنية مراجعة</b> ({total}). اختار حساب:"},
+    "list_suspects": {"en": "⚠️ <b>Possible duplicate accounts</b> ({total}). Pick an account:",
+                      "ar": "⚠️ <b>حسابات مشتبه إنها مكررة</b> ({total}). اختار حساب:"},
+    "list_empty": {"en": "✅ Nothing here right now.", "ar": "✅ مفيش حاجة دلوقتي."},
+    "user_card": {"en": "👤 <b>{name}</b>\n📧 {email}\n📱 {phone}\n🌍 Nationality: {nationality}\n"
+                        "🏢 {company}\n🗓 Signed up: {created} · IP {ip}\n✉️ Email confirmed: {verified}\n"
+                        "💳 Balance: {balance}\n\nStatus: {status}",
+                  "ar": "👤 <b>{name}</b>\n📧 {email}\n📱 {phone}\n🌍 الجنسية: {nationality}\n"
+                        "🏢 {company}\n🗓 سجّل: {created} · IP {ip}\n✉️ أكّد الإيميل: {verified}\n"
+                        "💳 الرصيد: {balance}\n\nالحالة: {status}"},
+    "st_pending": {"en": "⏳ waiting for review", "ar": "⏳ مستني المراجعة"},
+    "st_approved": {"en": "✅ approved", "ar": "✅ مقبول"},
+    "st_rejected": {"en": "❌ rejected", "ar": "❌ مرفوض"},
+    "reviewed_by": {"en": "by {who}", "ar": "بواسطة {who}"},
+    "reject_reason_line": {"en": "Reason: {reason}", "ar": "السبب: {reason}"},
+    "dups_title": {"en": "⚠️ <b>Shares traits with {n} other account(s):</b>",
+                   "ar": "⚠️ <b>بيشارك بيانات مع {n} حساب تاني:</b>"},
+    "dups_none": {"en": "✅ No other account shares its device, phone or email.",
+                  "ar": "✅ مفيش حساب تاني بيشاركه نفس الجهاز أو الموبايل أو الإيميل."},
+    "weak_only": {"en": "(weak evidence only: could be the same office, mobile network or phone model)",
+                  "ar": "(دليل ضعيف بس: ممكن يكونوا نفس المكتب أو شبكة الموبايل أو نوع الموبايل)"},
+    "yes": {"en": "yes", "ar": "أيوه"},
+    "no": {"en": "no", "ar": "لأ"},
+    "btn_approve": {"en": "✅ Approve", "ar": "✅ قبول"},
+    "btn_reject": {"en": "❌ Reject", "ar": "❌ رفض"},
+    "btn_readmit": {"en": "♻️ Approve again", "ar": "♻️ قبول تاني"},
+    "pick_reason": {"en": "❌ Why reject this account? The reason is emailed to the user.",
+                    "ar": "❌ ليه هترفض الحساب ده؟ السبب هيتبعت للمستخدم على الإيميل."},
+    "reason_dup": {"en": "👥 Duplicate account", "ar": "👥 حساب مكرر"},
+    "reason_fake": {"en": "🚫 Fake or incomplete details", "ar": "🚫 بيانات وهمية أو ناقصة"},
+    "reason_other": {"en": "✍️ Another reason (type it)", "ar": "✍️ سبب تاني (اكتبه)"},
+    "type_reason": {"en": "✍️ Type the reason (at least 3 characters), or /cancel.",
+                    "ar": "✍️ اكتب السبب (3 حروف على الأقل)، أو /cancel."},
+    "approved_ok": {"en": "✅ Approved. The user can start the free trial.", "ar": "✅ اتقبل. المستخدم يقدر يبدأ التجربة."},
+    "rejected_ok": {"en": "❌ Rejected. The user can no longer sign in.", "ar": "❌ اترفض. المستخدم مش هيقدر يدخل تاني."},
+    "already_reviewed": {"en": "Someone already reviewed this account.", "ar": "الحساب ده اتراجع قبل كده."},
 }
+
+# Reasons shared with the user by email, so both languages at once.
+REJECT_REASONS = {"dup": "Duplicate account / حساب مكرر", "fake": "Fake or incomplete details / بيانات وهمية أو ناقصة"}
+SIGNALS = {"device": ("same browser", "نفس المتصفح"), "fingerprint": ("same device", "نفس الجهاز"),
+           "phone": ("same phone", "نفس رقم الموبايل"), "email": ("same email (alias)", "نفس الإيميل بصيغة تانية"),
+           "ip": ("same IP", "نفس الـ IP")}
 
 STATUS = {
     "draft": ("📝", "Draft", "مسودة"),

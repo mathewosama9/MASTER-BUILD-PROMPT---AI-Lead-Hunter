@@ -105,7 +105,7 @@ export function LeadsTable({
     min_score: "",
     has_contact: "",
     source: "",
-    is_demo: "",
+    is_demo: "false", // real leads only; demo data is never listed
   });
   const [sort, setSort] = useState<{ sort: string; order: "asc" | "desc" }>({ sort: "score", order: "desc" });
   const [page, setPage] = useState(1);
@@ -198,12 +198,7 @@ export function LeadsTable({
               </Select>
               <Select aria-label={t.leads.source} className="w-full md:w-32" value={filters.source} onChange={(e) => set("source", e.target.value)}>
                 <option value="">{t.leads.source}</option>
-                {["google_maps", "osm", "directories", "social_discovery", "import", "brave", "hunter", "x", "facebook", "manual", "demo"].map((s) => <option key={s} value={s}>{t.customerSources[s]?.name ?? source(s)}</option>)}
-              </Select>
-              <Select aria-label={t.leads.data} className="w-full md:w-32" value={filters.is_demo} onChange={(e) => set("is_demo", e.target.value)}>
-                <option value="">{t.leads.realAndDemo}</option>
-                <option value="false">{t.leads.realOnly}</option>
-                <option value="true">{t.leads.demoOnly}</option>
+                {["google_maps", "osm", "directories", "social_discovery", "import", "brave", "hunter", "x", "facebook", "manual"].map((s) => <option key={s} value={s}>{t.customerSources[s]?.name ?? source(s)}</option>)}
               </Select>
             </>
           ) : null}

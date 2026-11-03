@@ -95,6 +95,16 @@ function readLocale(): Locale {
   }
 }
 
+/** Has this browser a language of its own (picked by the user), or is it still on the default? */
+export function hasSavedLocale(): boolean {
+  try {
+    const saved = window.localStorage.getItem(STORAGE_KEY);
+    return saved === "ar" || saved === "en";
+  } catch {
+    return false;
+  }
+}
+
 function subscribe(cb: () => void) {
   listeners.add(cb);
   window.addEventListener("storage", cb);

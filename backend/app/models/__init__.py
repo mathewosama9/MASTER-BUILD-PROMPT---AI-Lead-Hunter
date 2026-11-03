@@ -14,6 +14,7 @@ from app.models.business import (
 )
 from app.models.campaign import Campaign, CampaignLead, CampaignRun, CampaignSource
 from app.models.identity import (
+    AccountSignal,
     TelegramAccount,
     TelegramLinkCode,
     User,
@@ -22,11 +23,14 @@ from app.models.identity import (
     WorkspaceProfile,
 )
 from app.models.marketing import Testimonial
+from app.models.notify import Broadcast, Notification, NotificationDelivery
 from app.models.ops import AuditLog, JobEvent, ProviderConfiguration, ProviderUsage, SuppressionEntry
 
 __all__ = [
+    "AccountSignal",
     "AuditLog",
     "Base",
+    "Broadcast",
     "Business",
     "BusinessContact",
     "BusinessEvidence",
@@ -43,6 +47,8 @@ __all__ = [
     "LeadNote",
     "LeadScore",
     "LeadTag",
+    "Notification",
+    "NotificationDelivery",
     "OutreachActivity",
     "OutreachDraft",
     "PlatformSettings",

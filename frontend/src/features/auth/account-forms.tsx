@@ -270,3 +270,50 @@ export function VerifyEmailBanner({ email, trialPending }: { email: string; tria
     </div>
   );
 }
+
+/** The unsubscribe link in news and offer emails: turns that kind of email off, no sign-in needed. */
+export function Unsubscribe() {
+  const { t } = useI18n();
+  const started = useRef(false);
+  const [state, setState] = useState<"working" | "done" | "invalid" | "error">("working");
+  const [kind, setKind] = useState("");
+
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    const token = takeToken();
+    if (!token) {
+      setState("invalid"); // eslint-disable-line react-hooks/set-state-in-effect
+      return;
+    }
+    api<{ kind: string }>("/notifications/unsubscribe", { method: "POST", query: { token } })
+      .then((r) => {
+        setKind(r.kind);
+        setState("done");
+      })
+      .catch((e) => setState(e instanceof ApiError && e.code === "invalid_token" ? "invalid" : "error"));
+  }, []);
+
+  return (
+    <AuthCard title={t.notify.unsubscribeTitle}>
+      {state === "working" ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> {t.notify.unsubscribing}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          <Notice ok={state === "done"}>
+            {state === "done"
+              ? t.notify.unsubscribed.replace("{kind}", t.notify.kinds[kind] ?? kind)
+              : state === "invalid"
+                ? t.notify.unsubscribeInvalid
+                : t.notify.unsubscribeFailed}
+          </Notice>
+          <Button asChild variant="ink">
+            <Link href="/app/settings?tab=notifications">{t.notify.settingsLink}</Link>
+          </Button>
+        </div>
+      )}
+    </AuthCard>
+  );
+}

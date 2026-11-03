@@ -5,15 +5,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input } from "@/components/ui/primitives";
+import { Field, Input, Select } from "@/components/ui/primitives";
 import { Spinner } from "@/components/ui/states";
 import { useI18n } from "@/i18n/provider";
 import { api, ApiError } from "@/lib/api";
+import { countryOptions } from "@/lib/countries";
+import { deviceFingerprint } from "@/lib/device";
 
 import { AuthFrame } from "./auth-frame";
 
@@ -29,6 +31,7 @@ export const registerSchema = z.object({
       const digits = v.replace(/\D/g, "").length;
       return digits >= 7 && digits <= 15;
     }, "invalidPhone"),
+  nationality: z.string().regex(/^[A-Z]{2}$/, "required"),
   password: z.string().min(10, "passwordMin"),
 });
 type RegisterValues = z.infer<typeof registerSchema>;
@@ -38,7 +41,7 @@ interface TrialTerms {
   trial_credits: number;
 }
 
-const fields: { name: keyof RegisterValues; type: string; autoComplete: string }[] = [
+const fields: { name: Exclude<keyof RegisterValues, "nationality">; type: string; autoComplete: string }[] = [
   { name: "full_name", type: "text", autoComplete: "name" },
   { name: "company", type: "text", autoComplete: "organization" },
   { name: "email", type: "email", autoComplete: "email" },
@@ -52,16 +55,17 @@ export function RegisterForm() {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const countries = useMemo(() => countryOptions(locale), [locale]);
   const trial = useQuery({ queryKey: ["public-trial"], queryFn: () => api<TrialTerms>("/public/trial") });
   const form = useForm<RegisterValues>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { full_name: "", company: "", email: "", phone: "", password: "" },
+    defaultValues: { full_name: "", company: "", email: "", phone: "", nationality: "", password: "" },
   });
 
   async function onSubmit(values: RegisterValues) {
     setError(null);
     try {
-      await api("/auth/register", { method: "POST", body: { ...values, locale } });
+      await api("/auth/register", { method: "POST", body: { ...values, locale, device_fp: await deviceFingerprint() } });
       await qc.invalidateQueries({ queryKey: ["me"] });
       // Straight into onboarding; a business type picked on the public site rides along.
       const category = new URLSearchParams(window.location.search).get("category");
@@ -85,7 +89,21 @@ export function RegisterForm() {
       )}
       <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
         {fields.map((f) => (
-          <Field key={f.name} label={t.register[f.name]} htmlFor={f.name} error={vmsg(form.formState.errors[f.name]?.message)}>
+          <Fragment key={f.name}>
+          {f.name === "password" ? (
+            <Field label={t.register.nationality} htmlFor="nationality" error={vmsg(form.formState.errors.nationality?.message)}>
+              <Select id="nationality" autoComplete="country" aria-invalid={!!form.formState.errors.nationality} {...form.register("nationality")}>
+                <option value="">{t.register.nationalityPick}</option>
+                {countries.map((c, i) => (
+                  <Fragment key={c.code}>
+                    {i > 0 && countries[i - 1].common && !c.common ? <option disabled>──────────</option> : null}
+                    <option value={c.code}>{c.name}</option>
+                  </Fragment>
+                ))}
+              </Select>
+            </Field>
+          ) : null}
+          <Field label={t.register[f.name]} htmlFor={f.name} error={vmsg(form.formState.errors[f.name]?.message)}>
             <div className="relative">
               <Input
                 id={f.name}
@@ -109,6 +127,7 @@ export function RegisterForm() {
               ) : null}
             </div>
           </Field>
+          </Fragment>
         ))}
         {error ? (
           <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -131,7 +150,9 @@ export function RegisterForm() {
           {t.register.consentSuffix}
         </p>
         {trial.data ? (
-          <p className="text-xs text-muted-foreground">{t.register.verifyNote.replace("{credits}", String(trial.data.trial_credits))}</p>
+          <p className="text-xs text-muted-foreground">
+            {t.register.verifyNote.replace("{credits}", String(trial.data.trial_credits))} {t.register.reviewNote}
+          </p>
         ) : null}
       </form>
       <p className="mt-6 text-sm text-muted-foreground">

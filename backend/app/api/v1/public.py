@@ -4,14 +4,13 @@ import logging
 import re
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Query, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, or_, select
 
 from app.api.deps import DB
 from app.api.v1.billing import active_packages
 from app.core.config import get_settings
-from app.core.db import get_sessionmaker
 from app.core.ratelimit import enforce
 from app.models import Business, BusinessContact, Campaign, CampaignLead, ContactRequest, LeadAssessment, Testimonial
 from app.models.enums import ContactInterest, ContactType, TestimonialStatus
@@ -19,7 +18,7 @@ from app.research.catalog import PROVIDER_CATEGORIES
 from app.schemas.billing import PackageOut
 from app.schemas.marketing import PublicTestimonialOut
 from app.services import credits as credit_svc
-from app.services.notifications import notify_platform_admins
+from app.services.notify import notify_admins
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/public", tags=["public"])
@@ -65,28 +64,8 @@ class ContactIn(BaseModel):
         return v.strip() if isinstance(v, str) else v
 
 
-async def _notify(contact_id: object) -> None:
-    async with get_sessionmaker()() as db:
-        c = await db.get(ContactRequest, contact_id)
-        if c is None:
-            return
-        lines = [
-            "📩 New contact request",
-            f"Name: {c.name}" + (f" · {c.company}" if c.company else ""),
-            f"Email: {c.email}",
-            f"Phone: {c.phone or '—'}",
-            f"Interest: {c.interest}",
-        ]
-        if c.message:
-            lines.append(f"Message: {c.message[:1500]}")
-        try:
-            await notify_platform_admins(db, "\n".join(lines))
-        except Exception:  # noqa: BLE001 - the request is saved either way
-            log.warning("contact notification failed", exc_info=True)
-
-
 @router.post("/contact", status_code=201)
-async def contact(body: ContactIn, request: Request, background: BackgroundTasks, db: DB) -> dict:
+async def contact(body: ContactIn, request: Request, db: DB) -> dict:
     ip = request.client.host if request.client else "unknown"
     await enforce(f"contact:{ip}", get_settings().contact_limit_per_hour, 3600)
     if body.website:  # a bot filled the hidden field: pretend success, store nothing
@@ -102,8 +81,20 @@ async def contact(body: ContactIn, request: Request, background: BackgroundTasks
         ip=ip,
     )
     db.add(c)
+    await notify_admins(
+        db,
+        "admin_contact",
+        {
+            "name": c.name,
+            "company": c.company,
+            "email": c.email,
+            "phone": c.phone,
+            "interest": c.interest,
+            "message": (c.message or "")[:1500],
+        },
+        link="/app/admin?tab=contacts",
+    )
     await db.commit()
-    background.add_task(_notify, c.id)
     return {"status": "received"}
 
 

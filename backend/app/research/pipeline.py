@@ -2545,9 +2545,15 @@ async def execute_campaign(
     status = await pipeline.execute()
     if status in (CampaignStatus.COMPLETED, CampaignStatus.PARTIALLY_COMPLETED, CampaignStatus.FAILED):
         from app.services.notifications import notify_campaign_finished
+        from app.services.notify.events import campaign_finished
 
         try:
             await notify_campaign_finished(db, campaign)
         except Exception:  # noqa: BLE001 - notification failure must not change campaign outcome
             log.exception("completion notification failed")
+        try:
+            await campaign_finished(db, campaign)  # bell / email / Telegram per the user's notification settings
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("queueing completion notifications failed")
     return status

@@ -14,6 +14,38 @@ export class ApiError extends Error {
 
 export const API_BASE = "/api/v1";
 
+/** Set while a platform admin views a customer's account, so an expired view returns to the admin, not to /login. */
+export const VIEWING_KEY = "rasd-viewing-as";
+
+export function setViewing(on: boolean) {
+  try {
+    if (on) sessionStorage.setItem(VIEWING_KEY, "1");
+    else sessionStorage.removeItem(VIEWING_KEY);
+  } catch {
+    /* storage blocked: an expired view then falls back to the login page */
+  }
+}
+
+function isViewing(): boolean {
+  try {
+    return sessionStorage.getItem(VIEWING_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Go back to the admin's own session (also works once the 30-minute view has expired). */
+export async function stopViewing(): Promise<{ user_id: string | null; signed_out: boolean }> {
+  const res = await fetch(`${API_BASE}/auth/impersonation/stop`, {
+    method: "POST",
+    headers: { Accept: "application/json", "X-CSRF-Token": readCookie("lh_csrf") ?? "" },
+    credentials: "same-origin",
+  });
+  setViewing(false);
+  if (!res.ok) return { user_id: null, signed_out: true };
+  return res.json();
+}
+
 function readCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
   const match = document.cookie.split("; ").find((c) => c.startsWith(`${name}=`));
@@ -64,6 +96,12 @@ export async function api<T>(
     }
     const onAuthPage = typeof window !== "undefined" && ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email"].some((p) => window.location.pathname.startsWith(p));
     if (res.status === 401 && typeof window !== "undefined" && !onAuthPage) {
+      if (isViewing()) {
+        // The read-only view of a customer ran out: return to the admin's own account.
+        const r = await stopViewing();
+        window.location.assign(r.signed_out ? `${window.location.origin}/login` : `${window.location.origin}/app/admin?tab=users${r.user_id ? `&user=${r.user_id}` : ""}`);
+        throw new ApiError(res.status, code, message, details);
+      }
       // Outside React: a hard navigation also clears all client caches for the expired session.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;

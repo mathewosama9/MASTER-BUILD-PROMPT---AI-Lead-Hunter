@@ -79,6 +79,8 @@ class JobEvent(UUIDPk, Timestamps, Base):
 
 class AuditLog(UUIDPk, Timestamps, Base):
     __tablename__ = "audit_logs"
+    # One user's sign-in history (admin user page) without scanning the whole log.
+    __table_args__ = (Index("ix_audit_logs_user_created", "user_id", "created_at"),)
 
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))

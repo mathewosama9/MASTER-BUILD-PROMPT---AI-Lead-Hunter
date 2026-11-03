@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("register schema", () => {
-  const ok = { full_name: "Sara", company: "Nile Dental", email: "s@n.eg", phone: "+20 100 123 4567", password: "long-enough-pw" };
+  const ok = { full_name: "Sara", company: "Nile Dental", email: "s@n.eg", phone: "+20 100 123 4567", nationality: "EG", password: "long-enough-pw" };
 
   it("accepts a complete signup", () => {
     expect(registerSchema.safeParse(ok).success).toBe(true);
@@ -41,6 +41,7 @@ describe("register schema", () => {
     ["password", "short"],
     ["email", "nope"],
     ["company", " "],
+    ["nationality", ""],
   ])("rejects a bad %s", (field, value) => {
     expect(registerSchema.safeParse({ ...ok, [field]: value }).success).toBe(false);
   });
@@ -60,13 +61,14 @@ describe("register form", () => {
     await userEvent.type(screen.getByLabelText("Company"), "Nile Dental");
     await userEvent.type(screen.getByLabelText("Work email"), "sara@nile.eg");
     await userEvent.type(screen.getByLabelText("Phone / WhatsApp"), "+20 100 123 4567");
+    await userEvent.selectOptions(screen.getByLabelText("Nationality"), "EG");
     await userEvent.type(screen.getByLabelText("Password (10+ characters)"), "long-enough-pw");
     await act(async () => {
       await userEvent.click(screen.getByRole("button", { name: "Start free trial" }));
     });
     expect(await screen.findByText("An account with this email already exists. Sign in instead.")).toBeInTheDocument();
     const call = fetchSpy.mock.calls.find(([u]) => String(u).endsWith("/auth/register"));
-    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ email: "sara@nile.eg", locale: "en" });
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ email: "sara@nile.eg", nationality: "EG", locale: "en" });
   });
 
   it("toggles password visibility, links the legal pages and says credits come after confirming", async () => {

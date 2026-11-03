@@ -31,7 +31,11 @@ def password_fingerprint(password_hash: str) -> str:
 
 
 def create_access_token(
-    user_id: uuid.UUID, workspace_id: uuid.UUID, minutes: int | None = None, password_hash: str | None = None
+    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    minutes: int | None = None,
+    password_hash: str | None = None,
+    impersonator: uuid.UUID | None = None,
 ) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
@@ -44,6 +48,8 @@ def create_access_token(
     }
     if password_hash:
         payload["pv"] = password_fingerprint(password_hash)
+    if impersonator:
+        payload["imp"] = str(impersonator)  # a platform admin viewing this account, read-only
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
 
 

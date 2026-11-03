@@ -1,5 +1,7 @@
 """Telegram linking and service-token access, as used by the bot."""
 
+import random
+
 import httpx
 
 from app.models.enums import Role
@@ -134,3 +136,36 @@ async def test_link_code_includes_deep_link(client, monkeypatch):
         monkeypatch.delenv("TELEGRAM_BOT_USERNAME")
         get_settings.cache_clear()
     assert (await client.post("/api/v1/telegram/link-code")).json()["deep_link"] is None
+
+
+async def test_me_and_admin_users_show_telegram_status(app, platform_admin, db, dispatched):
+    admin = await login(app, platform_admin[0].email)
+    other, _ = await make_user(db)
+    oc = await login(app, other.email)
+    assert (await oc.get("/api/v1/auth/me")).json()["telegram_status"] == "none"
+    await link(app, oc, random.randint(10**9, 2 * 10**9))  # the test database outlives a run
+    me = (await oc.get("/api/v1/auth/me")).json()
+    assert me["telegram_status"] == "linked"
+
+    row = (await admin.get("/api/v1/admin/users", params={"q": other.email})).json()["items"][0]
+    assert row["telegram_status"] == "linked"
+    linked = (await admin.get("/api/v1/admin/users", params={"telegram": True, "page_size": 100})).json()
+    assert other.email in [u["email"] for u in linked["items"]]
+    unlinked = (await admin.get("/api/v1/admin/users", params={"telegram": False, "page_size": 100})).json()
+    assert other.email not in [u["email"] for u in unlinked["items"]]
+    assert (await admin.get("/api/v1/admin/users/summary")).json()["telegram_linked"] >= 1
+    detail = (await admin.get(f"/api/v1/admin/users/{row['id']}")).json()
+    assert detail["telegram_status"] == "linked"
+    for c in (admin, oc):
+        await c.aclose()
+
+
+async def test_linked_account_defaults_to_arabic(app, client, db, dispatched):
+    from sqlalchemy import select
+
+    from app.models import TelegramAccount
+
+    tg_id = random.randint(10**9, 2 * 10**9)
+    await link(app, client, tg_id)
+    account = await db.scalar(select(TelegramAccount).where(TelegramAccount.telegram_user_id == tg_id))
+    assert account.locale == "ar"

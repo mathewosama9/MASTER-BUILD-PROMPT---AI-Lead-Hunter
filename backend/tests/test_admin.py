@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.models import ContactRequest, CreditPackage, CreditTransaction, TelegramAccount, Workspace
 from app.models.enums import CreditKind, TelegramLinkStatus
 from app.services import credits as credit_svc
-from tests.conftest import login, make_user
+from tests.conftest import deliver_all, login, make_user
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
@@ -197,6 +197,7 @@ async def test_new_topup_notifies_platform_admins(admin, client_ws, package, db,
     )
     await db.commit()
     await request_topup(client_ws[0], package)
+    await deliver_all()
     texts = [p["text"] for p in sent if p["chat_id"] == 777]
     assert texts and "Pack 300" in texts[0] and client_ws[2].name in texts[0]
 

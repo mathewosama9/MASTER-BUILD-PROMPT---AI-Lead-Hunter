@@ -11,7 +11,7 @@ from app.core.security import create_purpose_token, password_fingerprint
 from app.models import CreditTransaction, User, Workspace
 from app.models.enums import CreditKind
 from app.services import accounts
-from tests.conftest import PASSWORD, link_token, login, make_user
+from tests.conftest import PASSWORD, approve_signup, link_token, login, make_user
 
 
 @pytest.fixture(autouse=True)
@@ -139,10 +139,12 @@ async def signup(anon) -> dict:
         "email": f"omar-{uuid.uuid4().hex[:8]}@example.com",
         "phone": "+971 50 123 4567",
         "password": "a-long-enough-password",
+        "nationality": "AE",
         "locale": "en",
     }
     r = await anon.post("/api/v1/auth/register", json=body)
     assert r.status_code == 201, r.text
+    await approve_signup(body["email"])  # so confirming the email starts the trial
     anon.headers["x-csrf-token"] = r.json()["csrf_token"]
     return {**body, "workspace_id": r.json()["workspace_id"]}
 

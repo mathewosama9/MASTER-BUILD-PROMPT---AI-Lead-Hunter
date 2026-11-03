@@ -17,6 +17,9 @@ folder; the domain's `public_html/.htaccess` only points LiteSpeed at the Node a
 `app.cjs` serves the site, proxies `/api` and `/telegram/webhook` to Unix sockets, and starts any stopped service
 (now and every minute; also when a proxied request fails). The host caps an account at ~120 threads, so the
 worker uses Celery's solo pool, the DB pool is small and Chromium runs single-process (`SCRAPER_BROWSER_ARGS`).
+A second solo worker (`notify`, queue `notify`) sends the queued emails and Telegram notifications, so a long
+research run never holds them up. Email goes through the Hostinger mailbox (`SMTP_HOST=smtp.hostinger.com`,
+`SMTP_PORT=465`, `SMTP_SECURITY=ssl`); the outbox keeps to Admin → Notifications → "Emails per minute".
 
 ## Redeploy
 
@@ -26,7 +29,7 @@ Backend / bot code (from `ai-lead-hunter/`):
 tar czf - --exclude=__pycache__ backend/app backend/migrations backend/alembic.ini backend/pyproject.toml \
   telegram/bot telegram/main.py | ssh -p 65002 u960306846@178.16.128.8 \
   'cd ~/apps/rasd && tar xzf - -C src && cd src/backend && ../../venv/bin/alembic upgrade head &&
-   cd ~/apps/rasd && for s in api worker beat bot; do kill $(cat run/$s.pid); done'
+   cd ~/apps/rasd && for s in api worker notify beat bot; do kill $(cat run/$s.pid); done'
 ```
 
 The supervisor restarts the killed services within a minute (or on the next request).

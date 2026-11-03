@@ -32,6 +32,14 @@ class PlatformSettings(Timestamps, Base):
     showcase_workspace_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workspaces.id", ondelete="SET NULL"))
     # Research settings applied to every client campaign (schemas/campaign.py ResearchDefaults); {} = defaults.
     research_defaults: Mapped[dict] = mapped_column(JSONType, default=dict)
+    # Per notification kind: {"enabled", "channels": {in_app, email, telegram}, "user_can_disable"}; {} = catalog
+    # defaults (services/notify/catalog.py).
+    notification_policy: Mapped[dict] = mapped_column(JSONType, default=dict)
+    # Outbox pace for email: shared hosting SMTP accounts have hourly/daily send caps.
+    email_rate_per_minute: Mapped[int] = mapped_column(Integer, default=20, server_default="20")
+    # New self-signups wait for the admin's approval before their trial starts. Off: only signups that look like a
+    # second account of someone already registered wait (services/signup_review.py).
+    signup_review: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
 
 class CreditPackage(UUIDPk, Timestamps, Base):

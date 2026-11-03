@@ -13,6 +13,7 @@ import type {
   LeadRow,
   Me,
   Meta,
+  NotificationPage,
   Page,
   Profile,
   Provider,
@@ -215,4 +216,14 @@ export function useCampaignLive(id: string) {
 /** Platform admins (superusers) see provider names and costs; customers see neither. */
 export function usePlatformAdmin() {
   return !!useMe().data?.user.is_superuser;
+}
+
+/** The bell: newest notifications and the unread count, refreshed in the background. */
+export function useNotificationBell() {
+  return useQuery({
+    queryKey: ["notifications", "bell"],
+    queryFn: () => api<NotificationPage>("/notifications", { query: { limit: 10 } }),
+    refetchInterval: 45_000,
+    staleTime: 15_000,
+  });
 }

@@ -23,3 +23,7 @@ class TopUp(StatesGroup):
     method = State()
     reference = State()
     receipt = State()
+
+
+class RejectReason(StatesGroup):
+    text = State()

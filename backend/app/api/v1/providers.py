@@ -201,7 +201,7 @@ async def delete_session(platform: str, p: SuperPrincipal, db: DB) -> dict:
 
 @router.put("/{key}")
 async def update_provider(key: str, body: ProviderUpdate, p: SuperPrincipal, db: DB) -> dict:
-    if key not in KNOWN:
+    if key not in KNOWN or (key == "demo" and not get_settings().demo_mode):
         raise NotFound("Unknown provider")
     cfg = await svc.get_config(db, PLATFORM, key)
     if cfg is None:
@@ -233,7 +233,7 @@ async def update_provider(key: str, body: ProviderUpdate, p: SuperPrincipal, db:
 
 @router.post("/{key}/test")
 async def test_provider(key: str, p: SuperPrincipal, db: DB) -> dict:
-    if key not in KNOWN:
+    if key not in KNOWN or (key == "demo" and not get_settings().demo_mode):
         raise NotFound("Unknown provider")
     state: ProviderState
     if key in INTEGRATIONS:

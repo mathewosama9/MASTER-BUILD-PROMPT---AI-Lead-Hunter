@@ -258,7 +258,9 @@ similarly named company, another branch city or another country.
 - is_decision_maker: the person owns, founded, or runs this business (owner, founder, CEO, managing director, \
 general manager, partner, medical director, principal or equivalent) - not staff, customers, reviewers, \
 suppliers or authors of articles about it.
-Cite the excerpt ids (E1, E2...) you used. When the excerpts do not show something, answer false."""
+- role: their role at this business copied as written in the excerpts; empty when none is written.
+Cite the excerpt ids (E1, E2...) you used; each candidate may only cite its own excerpts. Except for is_current, \
+answer false when the excerpts do not show something. Keep reason to one short sentence, in Arabic."""
 
 
 async def judge(ai, biz: BusinessIdentity, people: list[DecisionMaker], known: dict[str, list[Proof]]):
